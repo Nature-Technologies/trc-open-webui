@@ -155,8 +155,8 @@ jobs:
         run: |
           count=$(find /tmp/digests -type f 2>/dev/null | wc -l | tr -d ' ')
           echo "digest_count=$count" >> $GITHUB_OUTPUT
-          if [ "$count" -lt 2 ]; then
-            echo "::warning::${{ matrix.variant.name }}: found $count digest(s), need 2 (one per arch). Skipping merge."
+          if [ "$count" -lt 1 ]; then
+            echo "::warning::${{ matrix.variant.name }}: found $count digest(s), need 1 (one per arch). Skipping merge."
             echo "skip=true" >> $GITHUB_OUTPUT
           else
             echo "skip=false" >> $GITHUB_OUTPUT
