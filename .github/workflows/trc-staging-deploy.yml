@@ -1,0 +1,218 @@
+name: TRC staging deploy (open-webui)
+
+# Additive and TRC-only. Does NOT build or publish -- docker.yaml already does
+# that. This rolls an already-published digest onto the staging host.
+#
+# Manual by design. `image_digest` is required, so every deploy is reproducible
+# and rollback is a re-dispatch with the previous digest, which the "Deploy"
+# step prints into the run log before replacing it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_digest:
+        description: 'Digest to deploy, e.g. sha256:<64 hex>. Tags are rejected.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # Stops this repository overlapping itself. Cross-repository races are
+  # handled by the flock on the host, because a concurrency group cannot span
+  # repositories.
+  group: trc-staging-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy open-webui to staging
+    if: github.repository == 'Nature-Technologies/trc-open-webui'
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate digest
+        env:
+          DIGEST: ${{ inputs.image_digest }}
+        run: |
+          set -eu
+          hex="${DIGEST#sha256:}"
+          if [ "$hex" = "$DIGEST" ]; then
+            echo "::error::image_digest must start with sha256:"; exit 1
+          fi
+          if [ "${#hex}" -ne 64 ]; then
+            echo "::error::image_digest must be sha256: plus 64 hex chars"; exit 1
+          fi
+          case "$hex" in
+            *[!0-9a-f]*)
+              echo "::error::digest hex must be lowercase 0-9a-f"; exit 1 ;;
+          esac
+
+      - name: Install SSH key and pin host key
+        env:
+          SSH_KEY: ${{ secrets.TRC_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.TRC_SSH_KNOWN_HOSTS }}
+        run: |
+          set -eu
+          if [ -z "$KNOWN_HOSTS" ]; then
+            echo "::error::TRC_SSH_KNOWN_HOSTS is empty. Host keys are pinned, not bypassed."
+            exit 1
+          fi
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Copy deploy artifacts
+        env:
+          SSH_HOST: ${{ secrets.TRC_SSH_HOST }}
+          SSH_USER: ${{ secrets.TRC_SSH_USER }}
+          SSH_PORT: ${{ secrets.TRC_SSH_PORT || '22' }}
+        run: |
+          set -eu
+          ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            'mkdir -p /srv/trc/staging/open-webui /srv/trc/staging/fingerprints'
+          scp -i ~/.ssh/id_deploy -P "$SSH_PORT" \
+            deploy/trc/docker-compose-staging-trc.yml \
+            "$SSH_USER@$SSH_HOST:/srv/trc/staging/open-webui/"
+
+      - name: Render .env and deploy
+        env:
+          SSH_HOST: ${{ secrets.TRC_SSH_HOST }}
+          SSH_USER: ${{ secrets.TRC_SSH_USER }}
+          SSH_PORT: ${{ secrets.TRC_SSH_PORT || '22' }}
+          DIGEST: ${{ inputs.image_digest }}
+          HERMES_API_KEY: ${{ secrets.HERMES_API_KEY }}
+          OPENWEBUI_JWT_SECRET: ${{ secrets.OPENWEBUI_JWT_SECRET }}
+          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+        run: |
+          set -eu
+          # Never `set -x` in this step: it would print every secret below.
+
+          if [ "${#HERMES_API_KEY}" -lt 16 ]; then
+            echo "::error::HERMES_API_KEY must be at least 16 characters, matching trc-hermes-agent's copy. Below that the gateway refuses to start :8642 at all."
+            exit 1
+          fi
+
+          umask 077
+          {
+            printf 'OPENWEBUI_IMAGE=ghcr.io/nature-technologies/trc-open-webui@%s\n' "$DIGEST"
+            printf 'HERMES_API_KEY=%s\n' "$HERMES_API_KEY"
+            printf 'OPENWEBUI_JWT_SECRET=%s\n' "$OPENWEBUI_JWT_SECRET"
+            printf 'OPENWEBUI_BIND=0.0.0.0\n'
+          } > env.staging
+          scp -i ~/.ssh/id_deploy -P "$SSH_PORT" env.staging \
+            "$SSH_USER@$SSH_HOST:/srv/trc/staging/open-webui/.env"
+          rm -f env.staging
+
+          # Publish a fingerprint of the two-repo JWT secret so it can be
+          # compared with trc-backend's IDENTITY_JWT_SECRET. Twelve hex
+          # characters of a SHA-256 over a 64-character random secret is not a
+          # secret and is not brute-forceable.
+          printf '%s' "$OPENWEBUI_JWT_SECRET" | sha256sum | cut -c1-12 > jwt.fpr
+          scp -i ~/.ssh/id_deploy -P "$SSH_PORT" jwt.fpr \
+            "$SSH_USER@$SSH_HOST:/srv/trc/staging/fingerprints/openwebui-jwt"
+          rm -f jwt.fpr
+
+          if [ -n "$GHCR_READ_TOKEN" ]; then
+            printf '%s' "$GHCR_READ_TOKEN" | ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" \
+              "$SSH_USER@$SSH_HOST" \
+              'docker login ghcr.io -u trc-deploy --password-stdin'
+          fi
+
+          ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          set -eu
+          cd /srv/trc/staging/open-webui
+          chmod 600 .env
+
+          docker network create poc-net 2>/dev/null || true
+          docker volume create trc-staging-open-webui-data >/dev/null
+
+          # Record the rollback target. Read the digest from the IMAGE, not the
+          # container: a container's inspect output has no RepoDigests key at
+          # all, so `docker inspect <container>` cannot produce this.
+          if img="$(docker inspect --format '{{.Image}}' open-webui 2>/dev/null)"; then
+            echo "rollback target (digest currently running):"
+            docker image inspect "$img" \
+              --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{else}}(built locally, no digest){{end}}'
+          else
+            echo "no open-webui container running yet"
+          fi
+
+          flock /var/lock/trc-deploy.lock -c '
+            cd /srv/trc/staging/open-webui
+            docker compose -f docker-compose-staging-trc.yml pull
+            docker compose -f docker-compose-staging-trc.yml up -d --remove-orphans
+          '
+          REMOTE
+
+      - name: Smoke test
+        env:
+          SSH_HOST: ${{ secrets.TRC_SSH_HOST }}
+          SSH_USER: ${{ secrets.TRC_SSH_USER }}
+          SSH_PORT: ${{ secrets.TRC_SSH_PORT || '22' }}
+        run: |
+          set -eu
+          ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          set -eu
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://127.0.0.1:3000/health; then ok=1; break; fi
+            sleep 2
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "open-webui never answered on :3000/health"
+            docker logs --tail 50 open-webui || true
+            exit 1
+          fi
+          echo "open-webui OK"
+
+          # THE shared-secret detector. This runs INSIDE the container so it
+          # reads that container's own OPENAI_API_KEY -- the only way to prove
+          # this repo's HERMES_API_KEY secret matches trc-hermes-agent's copy.
+          # A mismatch fails the deploy instead of shipping a broken chat path.
+          # python3 rather than curl: this is a Python-based image, so python3
+          # is guaranteed present.
+          docker exec -i open-webui python3 - <<'PY'
+          import os, sys, urllib.error, urllib.request
+          key = os.environ.get("OPENAI_API_KEY", "")
+          if not key:
+              print("OPENAI_API_KEY is empty inside the container")
+              sys.exit(1)
+          req = urllib.request.Request(
+              "http://hermes-agent:8642/v1/models",
+              headers={"Authorization": f"Bearer {key}"},
+          )
+          try:
+              urllib.request.urlopen(req, timeout=15)
+          except urllib.error.HTTPError as exc:
+              if exc.code in (401, 403):
+                  print(
+                      f"HTTP {exc.code} from the gateway: this repo's "
+                      "HERMES_API_KEY does not match trc-hermes-agent's copy"
+                  )
+              else:
+                  print(f"gateway returned HTTP {exc.code}")
+              sys.exit(1)
+          except Exception as exc:
+              print(f"could not reach hermes-agent:8642 over poc-net: {exc}")
+              sys.exit(1)
+          print("gateway reachable and the shared HERMES_API_KEY matches")
+          PY
+
+          # Two-repo JWT secret. Warn only: this depends on trc-backend writing
+          # its side, so it cannot gate a deploy.
+          ours=/srv/trc/staging/fingerprints/openwebui-jwt
+          theirs=/srv/trc/staging/fingerprints/backend-identity-jwt
+          if [ ! -f "$theirs" ]; then
+            echo "::warning::no trc-backend fingerprint at $theirs -- OPENWEBUI_JWT_SECRET vs IDENTITY_JWT_SECRET is unverified. A mismatch shows up as identity-verified requests failing while ordinary chat works."
+          elif [ "$(cat "$ours")" != "$(cat "$theirs")" ]; then
+            echo "::warning::OPENWEBUI_JWT_SECRET does not match trc-backend's IDENTITY_JWT_SECRET. Identity-verified requests will be rejected by the backend while ordinary chat keeps working."
+          else
+            echo "JWT secret matches trc-backend"
+          fi
+          REMOTE
