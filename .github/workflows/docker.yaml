@@ -3,9 +3,10 @@ name: Create and publish Docker images with specific build args
 on:
   workflow_dispatch:
   push:
+    # trc-publish.yml owns `dev` publishing for the TRC deploy, so this
+    # workflow must not also write the :dev tag.
     branches:
       - main
-      - dev
     tags:
       - v*
 
