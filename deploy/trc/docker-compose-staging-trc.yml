@@ -1,0 +1,66 @@
+# TRC staging deploy for open-webui. Additive and TRC-only -- no upstream
+# tooling reads this file, and it is deliberately named differently from the
+# root docker-compose*.yaml files so upstream merges cannot conflict.
+# See docs/deploy/trc-staging.md.
+name: trc-staging-open-webui
+
+networks:
+  # External: shared with the hermes-agent and paperclip compose projects, so
+  # none of them can own creation. `trc-shared` belongs to whoever runs the
+  # trc-backend stack and carries the redaction-filter calls to
+  # http://app:8000/redaction/*.
+  poc-net:
+    external: true
+  trc-shared:
+    external: true
+
+volumes:
+  # All Open WebUI chats, users and settings. External so a project rename can
+  # never silently swap in an empty volume.
+  trc-staging-open-webui-data:
+    external: true
+
+services:
+  open-webui:
+    image: ${OPENWEBUI_IMAGE:?OPENWEBUI_IMAGE must be set}
+    container_name: open-webui
+    networks: [poc-net, trc-shared]
+    restart: unless-stopped
+    # No depends_on: hermes-agent. It lives in a different compose project and
+    # depends_on cannot cross projects. Open WebUI tolerates an unreachable
+    # backend at boot, so `restart: unless-stopped` plus the deploy smoke gate
+    # covers ordering.
+    ports:
+      - "${OPENWEBUI_BIND:-0.0.0.0}:3000:8080"
+    environment:
+      # hermes-agent resolves by container name over poc-net, across projects.
+      OPENAI_API_BASE_URL: "http://hermes-agent:8642/v1"
+      OPENAI_API_KEY: "${HERMES_API_KEY:?HERMES_API_KEY must be set}"
+      # Without this, the two settings above are only *defaults*:
+      # `openai.api_base_urls` and `openai.api_keys` are PersistentConfig keys,
+      # and Config.get() returns the DB row from the carried-over data volume
+      # in preference to the default whenever persistence is on -- so a stale,
+      # empty connection row would silently outrank the values set here and
+      # chat would stay broken after a recreate. "False" makes this file the
+      # single source of truth for the Hermes connection on every boot.
+      # Trade-off: Admin -> Settings changes to any config-backed setting no
+      # longer survive a restart. Nothing is deleted, the rows are only
+      # bypassed, so removing this line restores the previous behaviour and
+      # the previously saved values.
+      ENABLE_PERSISTENT_CONFIG: "False"
+      ENABLE_TITLE_GENERATION: "false"
+      ENABLE_TAGS_GENERATION: "false"
+      ENABLE_FOLLOW_UP_GENERATION: "false"
+      ENABLE_AUTOCOMPLETE_GENERATION: "false"
+      ENABLE_SEARCH_QUERY_GENERATION: "false"
+      ENABLE_RETRIEVAL_QUERY_GENERATION: "false"
+      ENABLE_IMAGE_PROMPT_GENERATION: "false"
+      WEBUI_AUTH: "true"
+      ENABLE_FORWARD_USER_INFO_HEADERS: "true"
+      # Signs X-OpenWebUI-User-Jwt, which Hermes forwards to MCP servers as
+      # X-Hermes-End-User-Jwt. trc-backend verifies the signature, so the same
+      # value must be configured there as IDENTITY_JWT_SECRET. Nothing on
+      # either side detects a mismatch.
+      FORWARD_USER_INFO_HEADER_JWT_SECRET: "${OPENWEBUI_JWT_SECRET:?OPENWEBUI_JWT_SECRET must be set}"
+    volumes:
+      - trc-staging-open-webui-data:/app/backend/data
