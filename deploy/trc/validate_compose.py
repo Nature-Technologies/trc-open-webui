@@ -205,13 +205,31 @@ def _strict_mode_chars(line: str) -> set[str]:
     return chars
 
 
+def _step_with_run_containing(doc: dict, needle: str) -> dict | None:
+    """The first step whose `run:` script contains `needle`, or None.
+
+    Used to scope an assertion to a single step's own `env:` mapping rather
+    than the whole file: `secrets.HOST` appearing ANYWHERE (e.g. in an
+    unrelated step like the host-key scan) is not evidence that THIS step's
+    invocation actually derives from that secret.
+    """
+    for job in (doc.get("jobs") or {}).values():
+        for step in (job or {}).get("steps") or []:
+            script = (step or {}).get("run")
+            if script and needle in script:
+                return step
+    return None
+
+
 def check_deploy_workflow() -> None:
     """Assert the deploy workflow's security and reproducibility invariants.
 
-    These are properties a generic YAML linter cannot know about: the digest
-    pin that makes rollback a re-dispatch, the host-side mutex that stands in
-    for a cross-repository concurrency group, and the two ways this workflow
-    could leak or weaken credentials.
+    These are properties a generic YAML linter cannot know about: that the
+    deploy runs against a remote Docker context (never a raw SSH shell) using
+    the HOST/USERNAME secrets, that the external volume is verified rather
+    than pre-created, that compose is invoked with --env-file so secrets never
+    hit a shell command string, that a pull always precedes `up -d`, and the
+    ways this workflow could otherwise leak or weaken credentials.
     """
     check(WORKFLOW.is_file(), f"missing {WORKFLOW}")
     if not WORKFLOW.is_file():
@@ -226,16 +244,6 @@ def check_deploy_workflow() -> None:
         set(triggers) == {"workflow_dispatch"},
         "deploy must be workflow_dispatch only -- auto-deploy was explicitly "
         f"rejected; got triggers {sorted(str(t) for t in triggers)}",
-    )
-    inputs = ((triggers.get("workflow_dispatch") or {}).get("inputs")) or {}
-    check(
-        "image_digest" in inputs,
-        "workflow_dispatch must take an `image_digest` input",
-    )
-    check(
-        bool((inputs.get("image_digest") or {}).get("required")),
-        "`image_digest` must be required -- deploys are digest-pinned so that "
-        "rollback is a re-dispatch with the previous digest",
     )
     script_lines = _run_script_lines(doc)
 
@@ -253,14 +261,12 @@ def check_deploy_workflow() -> None:
         "and -u",
     )
     check(
-        any("flock" in ln for ln in script_lines),
-        "no `run:` block calls flock: three repositories deploy into one host "
-        "and a GitHub concurrency group cannot span repositories",
-    )
-    check(
         "StrictHostKeyChecking=no" not in raw
         and "StrictHostKeyChecking no" not in raw,
-        "host keys must be pinned via TRC_SSH_KNOWN_HOSTS, not bypassed",
+        "StrictHostKeyChecking must never be disabled -- host keys are "
+        "scanned at deploy time with `ssh-keyscan` (trust-on-first-use) "
+        "rather than pinned in a secret, so this is the only thing standing "
+        "between a mid-run key change and a silently accepted new key",
     )
 
     volume_creates = [
@@ -282,19 +288,66 @@ def check_deploy_workflow() -> None:
         "carries no data",
     )
 
-    unguarded_flock = [
-        ln.strip()
-        for ln in script_lines
-        if "flock" in ln and "-c" in ln and not re.search(r"-c\s*'set -e\b", ln)
+    check(
+        any("docker volume inspect trc-staging-open-webui-data" in ln for ln in script_lines),
+        "the deploy must verify the external volume with `docker volume inspect` "
+        "and refuse to run if it is absent -- Compose fails closed on a missing "
+        "external volume, and pre-creating one would boot the service against a "
+        "silently empty volume with every smoke test still passing",
+    )
+    check(
+        any("docker context create" in ln for ln in script_lines),
+        "the deploy must run against a remote Docker context, not over an SSH "
+        "shell -- that is what keeps the rendered .env off the server",
+    )
+    # Scoped to the step that actually runs `docker context create`, not the
+    # whole file: `secrets.HOST` merely appearing somewhere else (e.g. the
+    # host-key-scan step) says nothing about where THIS step's host comes
+    # from. A file-wide scan would let someone hardcode the host right here
+    # while `secrets.HOST` stays referenced in a completely different step.
+    context_step = _step_with_run_containing(doc, "docker context create")
+    context_step_env = {
+        str(k): str(v) for k, v in ((context_step or {}).get("env") or {}).items()
+    }
+    context_step_env_text = " ".join(context_step_env.values())
+    context_step_script = (context_step or {}).get("run") or ""
+    check(
+        context_step is not None
+        and "secrets.HOST" in context_step_env_text
+        and "secrets.USERNAME" in context_step_env_text
+        and "${HOST}" in context_step_script
+        and "${USERNAME}" in context_step_script,
+        "the step that runs `docker context create` must itself source HOST "
+        "and USERNAME from the HOST and USERNAME secrets (in that step's own "
+        "`env:`) and actually reference them in its script -- not a literal "
+        "hostname, and not merely a secret referenced somewhere else in the "
+        "file",
+    )
+    check(
+        any("--env-file" in ln for ln in script_lines),
+        "compose must be invoked with --env-file so secret values are never "
+        "interpolated into a shell command string",
+    )
+    # (line index, character offset within the line) rather than just a line
+    # index: two tuples compare lexicographically, so this also gets a
+    # same-line `docker compose pull && docker compose up -d` right -- with
+    # line index alone, both halves share one index and `min(...) < min(...)`
+    # would compare `i < i` and always be False, even though `pull` runs
+    # first.
+    pull_positions = [
+        (i, ln.find(" pull"))
+        for i, ln in enumerate(script_lines)
+        if "compose" in ln and " pull" in ln
+    ]
+    up_positions = [
+        (i, ln.find("up -d"))
+        for i, ln in enumerate(script_lines)
+        if "compose" in ln and "up -d" in ln
     ]
     check(
-        not unguarded_flock,
-        f"{unguarded_flock} runs a `flock -c` script whose first statement is "
-        "not `set -e`. The -c string is a SEPARATE shell, so the enclosing "
-        "`set -eu` does not reach into it: without it a failed `docker compose "
-        "pull` is ignored and `up -d` silently redeploys the image already on "
-        "the host while the run reports success. The style this asserts is "
-        "`flock <lock> -c 'set -e` with the commands on the following lines",
+        bool(pull_positions) and bool(up_positions) and min(pull_positions) < min(up_positions),
+        "`compose pull` must precede `compose up -d`, or a deploy can silently "
+        "run a stale image already present on the host",
     )
 
 

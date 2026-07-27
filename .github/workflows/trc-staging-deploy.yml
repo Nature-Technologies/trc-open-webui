@@ -1,225 +1,224 @@
 name: TRC staging deploy (open-webui)
+run-name: Deploy open-webui to Dev/Test Server
 
-# Additive and TRC-only. Does NOT build or publish -- docker.yaml already does
-# that. This rolls an already-published digest onto the staging host.
+# Additive and TRC-only. Does NOT build: trc-publish.yml publishes the image and
+# this rolls the configured moving tag onto the staging host.
 #
-# Manual by design. `image_digest` is required, so every deploy is reproducible
-# and rollback is a re-dispatch with the previous digest, which the "Deploy"
-# step prints into the run log before replacing it.
+# Runs `docker compose` from the runner against the host's Docker daemon over an
+# SSH context. Two consequences worth knowing:
+#   - the rendered .env is read by the LOCAL compose CLI and never lands on the
+#     server; values reach the containers as environment, not as a file on disk
+#   - this repo has no bind mount, so nothing else needs to reach the server
+#     except the JWT fingerprint (see "Publish the shared-key fingerprint")
 
 on:
   workflow_dispatch:
-    inputs:
-      image_digest:
-        description: 'Digest to deploy, e.g. sha256:<64 hex>. Tags are rejected.'
-        required: true
-        type: string
 
 permissions:
   contents: read
+  # Lets the runner authenticate to GHCR itself (see the "Log in to GHCR"
+  # step) -- packages are public today, but this makes a private package work
+  # too, with no new secret.
+  packages: read
 
 concurrency:
-  # Stops this repository overlapping itself. Cross-repository races are
-  # handled by the flock on the host, because a concurrency group cannot span
-  # repositories.
   group: trc-staging-deploy
   cancel-in-progress: false
+
+env:
+  # The moving tag this deploy tracks, published by trc-publish.yml. Change this
+  # one line to follow a different branch tag.
+  IMAGE_TAG: dev
+  IMAGE_REPO: ghcr.io/nature-technologies/trc-open-webui
+  COMPOSE_FILE_PATH: deploy/trc/docker-compose-staging-trc.yml
 
 jobs:
   deploy:
     name: Deploy open-webui to staging
     if: github.repository == 'Nature-Technologies/trc-open-webui'
     runs-on: ubuntu-latest
-    environment: staging
-    timeout-minutes: 15
+    environment: Staging
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - name: Checkout code
+        uses: actions/checkout@v5
 
-      - name: Validate digest
+      - name: Write SSH key and scan the host key
         env:
-          DIGEST: ${{ inputs.image_digest }}
-        run: |
-          set -eu
-          hex="${DIGEST#sha256:}"
-          if [ "$hex" = "$DIGEST" ]; then
-            echo "::error::image_digest must start with sha256:"; exit 1
-          fi
-          if [ "${#hex}" -ne 64 ]; then
-            echo "::error::image_digest must be sha256: plus 64 hex chars"; exit 1
-          fi
-          case "$hex" in
-            *[!0-9a-f]*)
-              echo "::error::digest hex must be lowercase 0-9a-f"; exit 1 ;;
-          esac
-
-      - name: Install SSH key and pin host key
-        env:
-          SSH_KEY: ${{ secrets.TRC_SSH_KEY }}
-          KNOWN_HOSTS: ${{ secrets.TRC_SSH_KNOWN_HOSTS }}
-        run: |
-          set -eu
-          if [ -z "$KNOWN_HOSTS" ]; then
-            echo "::error::TRC_SSH_KNOWN_HOSTS is empty. Host keys are pinned, not bypassed."
-            exit 1
-          fi
-          umask 077
-          mkdir -p ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
-          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-
-      - name: Copy deploy artifacts
-        env:
-          SSH_HOST: ${{ secrets.TRC_SSH_HOST }}
-          SSH_USER: ${{ secrets.TRC_SSH_USER }}
+          SSH_PRIVATE_KEY_DEV: ${{ secrets.SSH_PRIVATE_KEY_DEV }}
+          HOST: ${{ secrets.HOST }}
           SSH_PORT: ${{ secrets.TRC_SSH_PORT || '22' }}
         run: |
           set -eu
-          ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          # Never `set -x` in any step here: it would print secrets into the log.
+          if [ -z "$SSH_PRIVATE_KEY_DEV" ]; then
+            echo "::error::SSH_PRIVATE_KEY_DEV is empty"; exit 1
+          fi
+          if [ -z "$HOST" ]; then
+            echo "::error::HOST is empty"; exit 1
+          fi
+          install -m 600 -D /dev/null ~/.ssh/id_rsa
+          printf '%s\n' "$SSH_PRIVATE_KEY_DEV" > ~/.ssh/id_rsa
+          # Trust-on-first-use: the host key is taken from the host at deploy
+          # time rather than pinned. StrictHostKeyChecking stays ON, so a key
+          # that changes mid-run still aborts.
+          ssh-keyscan -p "$SSH_PORT" -H "$HOST" > ~/.ssh/known_hosts 2>/dev/null
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "::error::ssh-keyscan returned nothing for $HOST — host unreachable or SSH closed"
+            exit 1
+          fi
+
+      - name: Set up the remote Docker context
+        env:
+          HOST: ${{ secrets.HOST }}
+          USERNAME: ${{ secrets.USERNAME }}
+          SSH_PORT: ${{ secrets.TRC_SSH_PORT || '22' }}
+        run: |
           set -eu
-          # trc-shared is created by whoever runs the trc-backend stack, never by
-          # this deploy. Checked here, before any secret is copied to the host, so
-          # a missing backend network fails the run without leaving a rendered
-          # .env or a fingerprint behind.
+          # SSH_PORT here must match the port ssh-keyscan used above, or
+          # known_hosts describes a different endpoint than the one this
+          # context actually dials.
+          docker context create trc-staging \
+            --docker "host=ssh://${USERNAME}@${HOST}:${SSH_PORT}"
+          docker context use trc-staging
+          # Proves the SSH transport and the remote daemon before anything else.
+          docker version --format 'remote daemon {{.Server.Version}}'
+
+      - name: Verify host preconditions
+        run: |
+          set -eu
+          # Fail closed on the external volume. Compose refuses to start when an
+          # external volume is missing, and that is the guard: creating it here
+          # would boot open-webui against a silently EMPTY volume -- no chats,
+          # no users, no settings -- and every smoke test below would still
+          # pass. Worse here than elsewhere: open-webui is published on
+          # 0.0.0.0:3000 with signup enabled, so an empty data volume lets the
+          # first visitor become admin. It is created and populated during the
+          # Phase 2 migration.
+          if ! docker volume inspect trc-staging-open-webui-data >/dev/null 2>&1; then
+            echo "::error::external volume trc-staging-open-webui-data does not exist on the host. Create and populate it during the Phase 2 migration; this deploy will not create it."
+            exit 1
+          fi
+          # trc-shared belongs to the trc-backend stack; this deploy never
+          # creates it.
           if ! docker network inspect trc-shared >/dev/null 2>&1; then
-            echo "the external network trc-shared does not exist on this host."
-            echo "It is owned by the trc-backend stack and this deploy does not create it."
+            echo "::error::external network trc-shared does not exist on the host. It is owned by the trc-backend stack."
             exit 1
           fi
-          mkdir -p /srv/trc/staging/open-webui /srv/trc/staging/fingerprints
-          REMOTE
-          scp -i ~/.ssh/id_deploy -P "$SSH_PORT" \
-            deploy/trc/docker-compose-staging-trc.yml \
-            "$SSH_USER@$SSH_HOST:/srv/trc/staging/open-webui/"
+          # poc-net carries no data, so creating it is safe and idempotent.
+          docker network create poc-net 2>/dev/null || true
 
-      - name: Render .env and deploy
+      - name: Render the environment file
         env:
-          SSH_HOST: ${{ secrets.TRC_SSH_HOST }}
-          SSH_USER: ${{ secrets.TRC_SSH_USER }}
-          SSH_PORT: ${{ secrets.TRC_SSH_PORT || '22' }}
-          DIGEST: ${{ inputs.image_digest }}
           HERMES_API_KEY: ${{ secrets.HERMES_API_KEY }}
           OPENWEBUI_JWT_SECRET: ${{ secrets.OPENWEBUI_JWT_SECRET }}
-          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
         run: |
           set -eu
-          # Never `set -x` in this step: it would print every secret below.
+          # This file stays on the runner. The local compose CLI reads it and
+          # sends the values to the remote daemon as container environment, so
+          # no plaintext secret is ever written to the staging host.
 
           if [ "${#HERMES_API_KEY}" -lt 16 ]; then
-            echo "::error::HERMES_API_KEY must be at least 16 characters, matching trc-hermes-agent's copy. Below that the gateway refuses to start :8642 at all."
+            echo "::error::HERMES_API_KEY must be at least 16 characters, matching trc-hermes-agent's copy. Below that the gateway refuses to start the API server at all, so the symptom is connection-refused on :8642, not a 401."
             exit 1
           fi
-
-          # Charset guard for every secret rendered into .env below. Compose's
-          # env_file parser interpolates `$VAR` and `${VAR}` inside values and
-          # treats an unquoted ` #` as the start of a comment, so a secret
-          # containing $, a backtick or # reaches the container as a DIFFERENT
-          # string than the repository secret holds. Nothing errors: the service
-          # starts, and a mangled HERMES_API_KEY looks like a shared-secret
-          # mismatch while a mangled JWT secret silently fails only the
-          # identity-verified path. Values are written unquoted on purpose, so
-          # rejecting the characters is the only reliable guard.
-          reject_interpolation_chars() {
-            case "$2" in
+          for name in HERMES_API_KEY OPENWEBUI_JWT_SECRET; do
+            eval "value=\${$name}"
+            case "$value" in
               *'$'*|*'`'*|*'#'*)
-                echo "::error::$1 must not contain \$, a backtick or #. Compose's .env parser interpolates the first two and treats # as a comment, so the container would receive a different value than the secret holds. Regenerate it with: openssl rand -hex 32"
+                echo "::error::$name contains \$, a backtick or #, which Compose mangles when interpolating the env file"
                 exit 1 ;;
             esac
-          }
-          reject_interpolation_chars HERMES_API_KEY "$HERMES_API_KEY"
-          reject_interpolation_chars OPENWEBUI_JWT_SECRET "$OPENWEBUI_JWT_SECRET"
+          done
 
           umask 077
           {
-            printf 'OPENWEBUI_IMAGE=ghcr.io/nature-technologies/trc-open-webui@%s\n' "$DIGEST"
+            printf 'OPENWEBUI_IMAGE=%s:%s\n' "$IMAGE_REPO" "$IMAGE_TAG"
             printf 'HERMES_API_KEY=%s\n' "$HERMES_API_KEY"
             printf 'OPENWEBUI_JWT_SECRET=%s\n' "$OPENWEBUI_JWT_SECRET"
             printf 'OPENWEBUI_BIND=0.0.0.0\n'
-          } > env.staging
-          scp -i ~/.ssh/id_deploy -P "$SSH_PORT" env.staging \
-            "$SSH_USER@$SSH_HOST:/srv/trc/staging/open-webui/.env"
-          rm -f env.staging
+          } > .env.staging
 
-          # Publish a fingerprint of the two-repo JWT secret so it can be
-          # compared with trc-backend's IDENTITY_JWT_SECRET. Twelve hex
-          # characters of a SHA-256 over a 64-character random secret is not a
-          # secret and is not brute-forceable.
-          printf '%s' "$OPENWEBUI_JWT_SECRET" | sha256sum | cut -c1-12 > jwt.fpr
-          scp -i ~/.ssh/id_deploy -P "$SSH_PORT" jwt.fpr \
-            "$SSH_USER@$SSH_HOST:/srv/trc/staging/fingerprints/openwebui-jwt"
-          rm -f jwt.fpr
-
-          if [ -n "$GHCR_READ_TOKEN" ]; then
-            printf '%s' "$GHCR_READ_TOKEN" | ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" \
-              "$SSH_USER@$SSH_HOST" \
-              'docker login ghcr.io -u trc-deploy --password-stdin'
-          fi
-
-          ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
-          set -eu
-          cd /srv/trc/staging/open-webui
-          chmod 600 .env
-
-          docker network create poc-net 2>/dev/null || true
-
-          # Deliberately NOT `docker volume create`. Compose refuses to start when
-          # an external volume is missing, and that fail-closed behaviour is the
-          # whole point of declaring them external: pre-creating one here would
-          # boot the service against a silently EMPTY volume, and every smoke
-          # test below would still pass -- worse here than anywhere else, because
-          # Open WebUI is published on 0.0.0.0:3000 with signup enabled, so an
-          # empty data volume lets the first visitor become admin. The volume is
-          # created and populated during the Phase 2 migration, not by a deploy.
-          if ! docker volume inspect trc-staging-open-webui-data >/dev/null 2>&1; then
-            echo "the external volume trc-staging-open-webui-data does not exist on this host."
-            echo "Create and populate it during the Phase 2 migration; this deploy will not create it."
-            exit 1
-          fi
-
-          # Record the rollback target. Read the digest from the IMAGE, not the
-          # container: a container's inspect output has no RepoDigests key at
-          # all, so `docker inspect <container>` cannot produce this.
-          if img="$(docker inspect --format '{{.Image}}' open-webui 2>/dev/null)"; then
-            echo "rollback target (digest currently running):"
-            docker image inspect "$img" \
-              --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{else}}(built locally, no digest){{end}}'
-          else
-            echo "no open-webui container running yet"
-          fi
-
-          flock /var/lock/trc-deploy.lock -c 'set -e
-            cd /srv/trc/staging/open-webui
-            docker compose -f docker-compose-staging-trc.yml pull
-            docker compose -f docker-compose-staging-trc.yml up -d --remove-orphans
-          '
-          REMOTE
-
-      - name: Smoke test
+      - name: Publish the shared-key fingerprint
         env:
-          SSH_HOST: ${{ secrets.TRC_SSH_HOST }}
-          SSH_USER: ${{ secrets.TRC_SSH_USER }}
+          OPENWEBUI_JWT_SECRET: ${{ secrets.OPENWEBUI_JWT_SECRET }}
+          HOST: ${{ secrets.HOST }}
+          USERNAME: ${{ secrets.USERNAME }}
           SSH_PORT: ${{ secrets.TRC_SSH_PORT || '22' }}
         run: |
           set -eu
-          ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" 'bash -s' <<'REMOTE'
+          # Twelve hex characters of a SHA-256 over the JWT secret. Not a
+          # secret and not brute-forceable; it lets trc-backend detect that its
+          # IDENTITY_JWT_SECRET has drifted from this repo's copy.
+          printf '%s' "$OPENWEBUI_JWT_SECRET" | sha256sum | cut -c1-12 > openwebui.fpr
+          ssh -i ~/.ssh/id_rsa -p "$SSH_PORT" "${USERNAME}@${HOST}" \
+            'mkdir -p /srv/trc/staging/fingerprints'
+          scp -i ~/.ssh/id_rsa -P "$SSH_PORT" openwebui.fpr \
+            "${USERNAME}@${HOST}:/srv/trc/staging/fingerprints/openwebui-jwt"
+          rm -f openwebui.fpr
+
+      - name: Log in to GHCR
+        # Over a remote Docker context, `docker compose pull` sends THIS
+        # runner's registry credentials to the remote daemon (X-Registry-Auth)
+        # -- the staging host never needs, and never gets, any credential of
+        # its own. Logging in here, not on the host, is what replaces the old
+        # host-side `docker login` + GHCR_READ_TOKEN secret; it works whether
+        # the package is public or private.
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull and deploy
+        run: |
+          set -eu
+          echo "deploying ${IMAGE_REPO}:${IMAGE_TAG}"
+          docker compose --env-file .env.staging -f "$COMPOSE_FILE_PATH" pull
+          docker compose --env-file .env.staging -f "$COMPOSE_FILE_PATH" up -d --remove-orphans
+          # Record what actually landed, so a rollback has a named target. Read
+          # from the IMAGE, not the container: a container's inspect output has
+          # no RepoDigests key at all. Guarded: a digest record is best-effort
+          # and must never fail an otherwise-successful deploy.
+          if img="$(docker inspect --format '{{.Image}}' open-webui 2>/dev/null)"; then
+            echo "deployed digest:"
+            docker image inspect "$img" \
+              --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{else}}(no digest){{end}}'
+          else
+            echo "could not inspect open-webui for a digest record (non-fatal)"
+          fi
+
+      - name: Smoke test
+        env:
+          HOST: ${{ secrets.HOST }}
+          USERNAME: ${{ secrets.USERNAME }}
+          SSH_PORT: ${{ secrets.TRC_SSH_PORT || '22' }}
+        run: |
           set -eu
           ok=0
-          for i in $(seq 1 30); do
-            if curl -fsS -o /dev/null http://127.0.0.1:3000/health; then ok=1; break; fi
+          for _ in $(seq 1 30); do
+            if docker exec -i open-webui python3 - <<'PY'
+          import sys, urllib.error, urllib.request
+          try:
+              urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=10)
+          except Exception as exc:
+              print(f"open-webui not ready: {exc}")
+              sys.exit(1)
+          print("open-webui OK")
+          PY
+            then ok=1; break; fi
             sleep 2
           done
           if [ "$ok" -ne 1 ]; then
-            echo "open-webui never answered on :3000/health"
+            echo "::error::open-webui never answered on :8080/health"
             docker logs --tail 50 open-webui || true
             exit 1
           fi
-          echo "open-webui OK"
 
           # THE shared-secret detector. This runs INSIDE the container so it
           # reads that container's own OPENAI_API_KEY -- the only way to prove
           # this repo's HERMES_API_KEY secret matches trc-hermes-agent's copy.
           # A mismatch fails the deploy instead of shipping a broken chat path.
-          # python3 rather than curl: this is a Python-based image, so python3
-          # is guaranteed present.
           docker exec -i open-webui python3 - <<'PY'
           import os, sys, urllib.error, urllib.request
           key = os.environ.get("OPENAI_API_KEY", "")
@@ -248,14 +247,27 @@ jobs:
           PY
 
           # Two-repo JWT secret. Warn only: this depends on trc-backend writing
-          # its side, so it cannot gate a deploy.
-          ours=/srv/trc/staging/fingerprints/openwebui-jwt
-          theirs=/srv/trc/staging/fingerprints/backend-identity-jwt
-          if [ ! -f "$theirs" ]; then
-            echo "::warning::no trc-backend fingerprint at $theirs -- OPENWEBUI_JWT_SECRET vs IDENTITY_JWT_SECRET is unverified. A mismatch shows up as identity-verified requests failing while ordinary chat works."
-          elif [ "$(cat "$ours")" != "$(cat "$theirs")" ]; then
+          # its side, so it must never fail a deploy. Reads files on the host
+          # filesystem, so this comparison stays on SSH rather than the Docker
+          # context.
+          ours=$(ssh -i ~/.ssh/id_rsa -p "$SSH_PORT" "${USERNAME}@${HOST}" \
+            'cat /srv/trc/staging/fingerprints/openwebui-jwt 2>/dev/null' || true)
+          theirs=$(ssh -i ~/.ssh/id_rsa -p "$SSH_PORT" "${USERNAME}@${HOST}" \
+            'cat /srv/trc/staging/fingerprints/backend-identity-jwt 2>/dev/null' || true)
+          if [ -z "$theirs" ]; then
+            echo "::warning::no trc-backend fingerprint at /srv/trc/staging/fingerprints/backend-identity-jwt -- OPENWEBUI_JWT_SECRET vs IDENTITY_JWT_SECRET is unverified. A mismatch shows up as identity-verified requests failing while ordinary chat works."
+          elif [ "$ours" != "$theirs" ]; then
             echo "::warning::OPENWEBUI_JWT_SECRET does not match trc-backend's IDENTITY_JWT_SECRET. Identity-verified requests will be rejected by the backend while ordinary chat keeps working."
           else
             echo "JWT secret matches trc-backend"
           fi
-          REMOTE
+
+      - name: Remove the deploy context
+        if: always()
+        run: |
+          set -eu
+          # .env.staging is the only secret this workflow ever writes to disk
+          # on the runner (never on the host). Clean it up even on failure.
+          rm -f .env.staging
+          docker context use default || true
+          docker context rm trc-staging || true
