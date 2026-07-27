@@ -7,10 +7,41 @@ shared external `poc-net` bridge.
 
 ## Host prerequisites
 
-The deploy creates `poc-net` and its own volume idempotently, but **not**
-`trc-shared` — that bridge is owned by whoever runs the trc-backend stack.
-The `Copy deploy artifacts` step fails early if it is missing, before any
-secret is written to the host. Create it on the backend side, not here.
+The deploy creates **only** `poc-net`, idempotently. It creates neither
+`trc-shared` nor `trc-staging-open-webui-data`, and it fails if either is
+missing:
+
+- **`trc-shared`** is owned by whoever runs the trc-backend stack. The
+  `Copy deploy artifacts` step fails early if it is absent, before any secret
+  is written to the host. Create it on the backend side, not here.
+- **`trc-staging-open-webui-data` must already exist and already hold the Open
+  WebUI database.** The deploy deliberately does not run `docker volume
+  create`: the volume is declared `external: true` precisely so Compose refuses
+  to start without it. Pre-creating it would boot Open WebUI against a silently
+  *empty* volume with every smoke test still passing — and because port 3000 is
+  published on `0.0.0.0` with signup enabled, an empty volume means **the first
+  visitor becomes admin**. See Phase 2 preconditions below.
+
+The deploy user also needs all of:
+
+- **write access to `/srv/trc`** (the deploy `mkdir -p`s
+  `/srv/trc/staging/open-webui` and `/srv/trc/staging/fingerprints`);
+- **membership of the `docker` group**, so `docker` works without `sudo`;
+- **permission to create `/var/lock/trc-deploy.lock`.** `/var/lock` is
+  root-owned `0755` on some images, in which case `flock` fails *after* the
+  `.env` and the JWT fingerprint have already been copied to the host. Either
+  grant write access to `/var/lock` or pre-create the lock file owned by the
+  deploy user.
+
+### Phase 2 preconditions
+
+This repo's only stateful dependency is `trc-staging-open-webui-data`. Before
+the first deploy, with the retired single-compose stack **stopped**, create the
+volume and copy the old project-prefixed volume's contents into it — the old
+name is the project-prefixed one Compose generated
+(e.g. `trc-docker-paperclip-hermes_open-webui-data`), not `open-webui-data`.
+Copy with the stack down so nothing is writing mid-copy. The deploy will refuse
+to run until the volume exists.
 
 ## Running a deploy
 
@@ -34,6 +65,14 @@ before replacing it.
 | `OPENWEBUI_JWT_SECRET` | **Two-repo secret.** trc-backend calls it `IDENTITY_JWT_SECRET` and also needs `ENFORCE_VERIFIED_IDENTITY=true`. Verified by fingerprint comparison, warn-only |
 | `GHCR_READ_TOKEN` | Optional. Only if the GHCR package is private |
 
+Both secrets rendered into the host `.env` are charset-guarded: the workflow
+rejects any value containing `$`, a backtick or `#`. Compose's `env_file` parser
+interpolates the first two and treats `#` as a comment, so such a value would
+reach the container as a *different* string with nothing erroring — a mangled
+`HERMES_API_KEY` looks like a shared-secret mismatch, a mangled
+`OPENWEBUI_JWT_SECRET` breaks only the identity-verified path. `openssl rand -hex
+32` never produces any of them.
+
 ## Known behaviour changes from the retired single-compose stack
 
 - **No `depends_on: hermes-agent`.** It is a separate compose project now, and
@@ -48,5 +87,11 @@ before replacing it.
 
 `deploy/trc/validate_compose.py` asserts the invariants that make three
 independent compose projects add up to one stack — above all `external: true`
-on every network and volume. It runs in the **TRC deploy checks** workflow.
-Read its docstring before changing the compose file.
+on every network and volume, plus each **service's** own `networks:` membership,
+since a top-level network no service joins is silently ignored. It also bans two
+things in the deploy workflow that would each fail open silently: any
+`docker volume create` (see Host prerequisites), and a `flock -c` string that
+does not begin with `set -e` — the `-c` string is a separate shell, so without
+it a failed `pull` is ignored and `up -d` redeploys the old image while the run
+goes green. It runs in the **TRC deploy checks** workflow. Read its docstring
+before changing the compose file or the deploy workflow.
