@@ -207,6 +207,54 @@ on `/var/lib/docker` is a hard requirement rather than a nicety:
 See "Pruning the deploy host" below before freeing space — some prunes destroy
 every rollback target.
 
+### Memory, and the frontend build's V8 heap
+
+This is the precondition that actually bit when the build moved onto the deploy
+host. The frontend stage failed with:
+
+```
+FATAL ERROR: Ineffective mark-compacts near heap limit
+Allocation failed - JavaScript heap out of memory
+```
+
+That is **V8's own limit**, not the kernel's — `SIGABRT`, where a kernel
+OOM-kill would be `SIGKILL`/exit 137. V8 sizes its default heap from the memory
+it can *see*, so the identical `npm run build` passes with no setting at all on
+the 16 GB `ubuntu-latest` runner in `frontend.yaml` and dies on a smaller host.
+Nothing about the build changed; the machine did.
+
+The deploy pins the cap explicitly. **`NODE_HEAP_MB` in the workflow's
+top-level `env:` is the single source of truth** (4096 today): the build step
+passes it as the `NODE_OPTIONS` build-arg, and `Verify host preconditions`
+derives its memory thresholds from the same number, so tuning it retunes the
+gate that guards it. The `Dockerfile` declares an identical `ARG NODE_OPTIONS`
+default so local builds work unchanged; staging uses the workflow's value.
+
+**Pinning the cap inverts the risk, which is why the gate exists.** A heap cap
+is not a reservation — it stops V8 self-limiting below what vite needs, but it
+does not make memory appear. With the cap pinned, V8 will *try* to use it, and a
+host that cannot spare it gets an OOM-kill instead of a clean build failure —
+possibly of a **running staging container**, because unlike the old
+build-on-the-runner arrangement the build now competes with the serving stack for
+the same RAM. BuildKit ignores `--memory`, so there is no container-level cap to
+fall back on: the heap number is the only lever, and the gate is what keeps it
+honest.
+
+The gate reads **`MemAvailable`** from `/proc/meminfo` — not `MemTotal`, since
+only `MemAvailable` accounts for what the running stack already holds — and logs
+`MemTotal`/`MemAvailable`/`SwapTotal` on every run:
+
+| Available memory | Behaviour |
+|---|---|
+| < `NODE_HEAP_MB` + 1 GB (5 GB today) | `Verify host preconditions` **fails** the run |
+| < `NODE_HEAP_MB` + 4 GB (8 GB today) | warns: fits, little slack alongside the stack |
+| more | fine |
+
+If it fails: free memory on the host, add swap, or lower `NODE_HEAP_MB` — but
+note that too low a cap simply reintroduces the heap-limit build failure, so a
+host that cannot hold both the stack and a ~4 GB build heap needs more RAM, not
+a smaller number.
+
 ### The `bootstrap` input
 
 `workflow_dispatch` takes a `bootstrap` boolean input, default `false`. When
@@ -414,6 +462,10 @@ From the retired build-on-runner, publish-to-GHCR scheme:
   `packages: write`, `pull_policy: never` on the service.
 - **Rollback targets are host-local** and are destroyed by `docker image prune
   -a` or a host rebuild. This is the main cost of the change.
+- **The build competes with the running stack for RAM and disk.** On the runner
+  it was isolated. `Dockerfile` now pins the frontend stage's V8 heap (upstream
+  ships that line commented out) and the deploy gates on `MemAvailable` before
+  building — see "Memory, and the frontend build's V8 heap".
 - **No env file.** Secrets are the `Deploy` step's process environment; the
   `$`/backtick/`#` charset guard is gone with the dotenv parsing that needed it.
 - **No cleanup step**, which leaks one `ssh-agent` per dispatch on the runner.

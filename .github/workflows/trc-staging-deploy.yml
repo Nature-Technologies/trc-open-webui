@@ -81,6 +81,18 @@ env:
   # under the retired publish-then-pull scheme.
   IMAGE: ghcr.io/nature-technologies/trc-open-webui
   COMPOSE_FILE_PATH: deploy/trc/docker-compose-staging-trc.yml
+  # V8 heap cap, in MB, for the FRONTEND build stage. Single source of truth:
+  # the "Verify host preconditions" step derives its memory thresholds from this
+  # number, and the build step passes it as the NODE_OPTIONS build-arg -- so
+  # tuning it here retunes the gate that keeps it safe, and the two cannot drift.
+  #
+  # Why it must be set at all: V8 sizes its default heap from the memory it can
+  # see. The same `npm run build` passes with no setting on the 16 GB
+  # ubuntu-latest runner in frontend.yaml, and died here with "Ineffective
+  # mark-compacts near heap limit" once the build moved onto the deploy host.
+  # 4096 matches what that CI job effectively gets, which is the evidence that
+  # this build fits in it.
+  NODE_HEAP_MB: 4096
 
 jobs:
   deploy:
@@ -223,6 +235,44 @@ jobs:
               fi ;;
           esac
 
+          # MEMORY is a build precondition too, now that the build runs here,
+          # and it is the one that actually bit: the frontend stage died with
+          # "Ineffective mark-compacts near heap limit" because V8 sizes its
+          # default heap from the memory it can see. The build now pins that cap
+          # explicitly (the NODE_OPTIONS build-arg below), which INVERTS the
+          # risk: V8 will try to use the cap, and if this host cannot spare it,
+          # the kernel OOM-kills something instead -- possibly a RUNNING staging
+          # container, since the build shares this host with the serving stack.
+          # BuildKit ignores `--memory`, so that heap cap is the only lever there
+          # is, and this gate is what makes pinning it safe.
+          #
+          # MemAvailable, not MemTotal: it accounts for reclaimable page cache
+          # and for what the running stack already holds, which is the only
+          # figure that answers "can a new 4 GB heap fit here".
+          meminfo=$(ssh -o BatchMode=yes -i "$RUNNER_TEMP/id_rsa" -p "$SSH_PORT" \
+            "${USERNAME}@${HOST}" 'cat /proc/meminfo' \
+            | grep -E '^(MemTotal|MemAvailable|SwapTotal):') || meminfo=""
+          printf '%s\n' "$meminfo"
+          avail_kb=$(printf '%s\n' "$meminfo" | awk '/^MemAvailable:/ {print $2}')
+          case "$avail_kb" in
+            ''|*[!0-9]*)
+              echo "::warning::Could not read available memory on the deploy host - check free -h manually. The frontend build needs roughly ${NODE_HEAP_MB} MB of headroom." ;;
+            *)
+              avail_mb=$((avail_kb / 1024))
+              # Thresholds derived from the cap itself: 1 GB of slack to fail on,
+              # 4 GB to be comfortable alongside the running stack.
+              min_mb=$((NODE_HEAP_MB + 1024))
+              warn_mb=$((NODE_HEAP_MB + 4096))
+              if [ "$avail_mb" -lt "$min_mb" ]; then
+                echo "::error::Only ${avail_mb} MB of memory available on the deploy host, and the frontend build pins a ${NODE_HEAP_MB} MB V8 heap (needs about ${min_mb} MB to be safe). Proceeding would let the kernel OOM-kill something to make room - possibly a RUNNING staging container, not just the build. Free memory on the host, add swap, or lower NODE_HEAP_MB (note that too low a cap simply reintroduces the heap-limit build failure). See docs/deploy/trc-staging.md."
+                exit 1
+              elif [ "$avail_mb" -lt "$warn_mb" ]; then
+                echo "::warning::${avail_mb} MB of memory available on the deploy host - the build's ${NODE_HEAP_MB} MB heap fits, but with little slack alongside the running stack."
+              else
+                echo "OK - ${avail_mb} MB of memory available on the deploy host."
+              fi ;;
+          esac
+
           # Fail closed on the external volume, UNLESS bootstrapping a fresh
           # host: Compose refuses to start when an external volume is missing,
           # and that is the guard. Creating it on a routine deploy would boot
@@ -280,6 +330,14 @@ jobs:
           tags: |
             ${{ steps.tags.outputs.staging }}
             ${{ steps.tags.outputs.sha }}
+          # The V8 heap cap for the frontend stage, from the job's NODE_HEAP_MB
+          # above so the gate that guards it cannot drift from the value it
+          # guards. The Dockerfile declares the same default for local builds;
+          # this is what staging actually uses. If it ever rendered empty, node
+          # rejects `--max-old-space-size=` outright, so the failure would be
+          # immediate and loud rather than a silently unbounded heap.
+          build-args: |
+            NODE_OPTIONS=--max-old-space-size=${{ env.NODE_HEAP_MB }}
           # A label, never a build-arg. The obvious build-arg here would be
           # BUILD_HASH, but it is consumed in the FRONTEND stage as
           # APP_BUILD_HASH, so passing the sha would invalidate the npm build
