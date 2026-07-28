@@ -26,7 +26,7 @@ optional:
 
 - **`driver: docker`** on `docker/setup-buildx-action` — the remote daemon's own
   builder, rather than a container whose cache dies with the run.
-- **no `cache-from`/`cache-to`** — the daemon's layer store *is* the cache now,
+- **no `cache-from`/`cache-to`** — the daemon's layer store _is_ the cache now,
   and the `docker` driver cannot use an external backend like `type=gha` at all.
 - **no `platforms`** — the build is native to the server. Naming a platform
   there risks buildx silently switching on QEMU emulation, turning a build that
@@ -41,7 +41,7 @@ it must be **Linux with `docker`, the compose plugin, `buildx` and an OpenSSH
 client**, and that is an operational requirement on runner registration rather
 than something the workflow can assert.
 
-**Never a `docker context`.** A context is *persistent state* on a self-hosted
+**Never a `docker context`.** A context is _persistent state_ on a self-hosted
 runner: `docker context create` fails "already exists" on the second run against
 the same runner, and `docker context use` repoints that runner's **default**
 daemon for every later job that lands on it — including sibling repos' deploys
@@ -56,7 +56,7 @@ start dialling the staging host for every docker call it makes.
 
 Because the build happens on the deploy host, a reachable daemon and free disk
 are preconditions of the **build**, not merely of the deploy. `Verify host
-preconditions` therefore runs *before* the build step and reads free space on
+preconditions` therefore runs _before_ the build step and reads free space on
 `/var/lib/docker`: it **fails** below 10 GB and warns below 25 GB. BuildKit's
 out-of-space failures name everything except the cause, so without this gate an
 out-of-space host fails obscurely most of an hour into a cold build instead of
@@ -96,7 +96,7 @@ binds the secrets as its own `env:`, and Compose resolves the compose file's
 - **No secret touches disk**, on the runner or on the server.
 - **Nothing is dotenv-parsed**, so values are taken literally. A `$`, backtick
   or `#` in a secret survives instead of being interpolated or truncated. The
-  workflow used to *reject* those three characters outright, because Compose's
+  workflow used to _reject_ those three characters outright, because Compose's
   `env_file` parser mangled them; that guard is gone because the failure it
   guarded against is gone. The **length** guard on `HERMES_API_KEY` remains — it
   is about the gateway, not about parsing.
@@ -136,7 +136,7 @@ with this one on the same `$HOME`.
   is lower (worst case under a race is a redundant rescan, not a hard auth
   failure) and there is no per-job equivalent of `$RUNNER_TEMP` for a file every
   job needs to read. The host-key scan writes into `$RUNNER_TEMP` first, removes
-  any stale entry for *this* host with `ssh-keygen -R` (both the bare-host and
+  any stale entry for _this_ host with `ssh-keygen -R` (both the bare-host and
   `[host]:port` spellings), and only then **appends** (`>>`) to the real file —
   never a bare `>` or a `tee` without `-a`, either of which would truncate
   entries other jobs rely on.
@@ -180,14 +180,14 @@ The deploy creates **only** `poc-net`, idempotently, on every run. Outside
 `trc-staging-open-webui-data`, and fails if either is missing:
 
 - **`trc-shared`** is owned by whoever runs the trc-backend stack. The `Verify
-  host preconditions` step fails early if it is absent, before the build starts.
+host preconditions` step fails early if it is absent, before the build starts.
   Create it on the backend side, not here — or dispatch with `bootstrap: true`
   on a genuinely fresh host (below).
 - **`trc-staging-open-webui-data` must already exist and already hold the Open
   WebUI database.** The deploy does not run `docker volume create` on a routine
   deploy: the volume is declared `external: true` precisely so Compose refuses
   to start without it, and pre-creating it would boot Open WebUI against a
-  silently *empty* volume — no chats, no users, no settings — with every smoke
+  silently _empty_ volume — no chats, no users, no settings — with every smoke
   test still passing. **Worse here than anywhere else in this stack:** Open
   WebUI is published on `0.0.0.0:3000` with signup enabled, so an empty data
   volume means **the first visitor becomes admin**, and every automated check
@@ -198,11 +198,11 @@ The deploy creates **only** `poc-net`, idempotently, on every run. Outside
 The host now carries the **build** as well as the running stack, so free space
 on `/var/lib/docker` is a hard requirement rather than a nicety:
 
-| Free space | Behaviour |
-|---|---|
-| < 10 GB | `Verify host preconditions` **fails** the run |
-| 10–25 GB | warns: enough for a cached build, tight for a cold one |
-| > 25 GB | fine |
+| Free space | Behaviour                                              |
+| ---------- | ------------------------------------------------------ |
+| < 10 GB    | `Verify host preconditions` **fails** the run          |
+| 10–25 GB   | warns: enough for a cached build, tight for a cold one |
+| > 25 GB    | fine                                                   |
 
 See "Pruning the deploy host" below before freeing space — some prunes destroy
 every rollback target.
@@ -219,7 +219,7 @@ Allocation failed - JavaScript heap out of memory
 
 That is **V8's own limit**, not the kernel's — `SIGABRT`, where a kernel
 OOM-kill would be `SIGKILL`/exit 137. V8 sizes its default heap from the memory
-it can *see*, so the identical `npm run build` passes with no setting at all on
+it can _see_, so the identical `npm run build` passes with no setting at all on
 the 16 GB `ubuntu-latest` runner in `frontend.yaml` and dies on a smaller host.
 Nothing about the build changed; the machine did.
 
@@ -233,7 +233,7 @@ it with the workflow's value, which is lower on purpose — see below.
 
 **Pinning the cap inverts the risk, which is why the gate exists.** A heap cap
 is not a reservation — it stops V8 self-limiting below what vite needs, but it
-does not make memory appear. With the cap pinned, V8 will *try* to use it, and a
+does not make memory appear. With the cap pinned, V8 will _try_ to use it, and a
 host that cannot spare it gets an OOM-kill instead of a clean build failure —
 possibly of a **running staging container**, because unlike the old
 build-on-the-runner arrangement the build now competes with the serving stack for
@@ -251,21 +251,43 @@ MemAvailable:  4327900 kB   ~4.1 GiB   -- after the running stack
 SwapTotal:     4194300 kB   ~4.0 GiB
 ```
 
-**The deploy host cannot give this build a 4 GB heap.** Even with the whole
-stack stopped, 4 GB of heap plus node's non-heap allocations is essentially the
-entire machine. `NODE_HEAP_MB` is therefore **3072** — the largest cap that fits
-in *physical* memory here.
+`NODE_HEAP_MB` is **4096** — the only cap this build is _proven_ to complete in,
+being what the 16 GB CI runner effectively gets. **Lowering it is not a route
+that exists:** 3072 was tried on this host and died the same way, with the heap
+pinned at 2997 MB of the 3072 cap and mark-compact reclaiming about 10 MB a pass
+(`mu = 0.03` — 97% of wall time in GC). The requirement is provably above 3 GB.
 
-Treat 3072 as an interim value tied to this host's size, not a tuned optimum.
-4096 is what the CI runner effectively gets and is the only cap this build is
-*proven* to complete in; **raise it back to 4096 on a host with 8 GB or more.**
-If 3072 still hits the heap limit, the requirement is provably above 3 GB and
-the answer is more RAM, not a smaller number.
+### Why the build is serialised
+
+What made 4096 possible on a 5.3 GB host was not the cap, it was removing a
+second consumer nobody had accounted for.
+
+Stages `build` (node/vite) and `base` (python, torch, sentence-transformers,
+whisper) are **independent** — nothing joins them until `COPY --from=build` at
+the end of the `Dockerfile` — so BuildKit starts both immediately. The first
+failures were a ~3–4 GB V8 heap running _concurrently_ with a multi-gigabyte
+torch install and model download, on a host with ~4.1 GB available. The build log
+shows it plainly: the `base` stage was mid-`BertModel LOAD REPORT` and got
+`CANCELED` when the frontend stage aborted.
+
+So the deploy runs **two** builds:
+
+1. `Build the frontend stage alone` — `target: build`, no tags. Exists only to
+   give the frontend stage the machine to itself.
+2. `Build the image on the deploy server` — the full image. The frontend layers
+   are a cache hit (same context, same build-args, same `Dockerfile`), so `base`
+   in turn gets the machine to itself.
+
+The cost is wall-clock: the two stages no longer overlap. That is the point.
+`validate_compose.py` applies its `push: false` / no-cache / no-`platforms`
+assertions to **both** steps, since either one pushing would break the
+no-registry design.
 
 Worth knowing why this repo is the outlier: `trc-hermes-agent` and `paperclip`
 build fine on the same host because their builds are light. open-webui is the
-only one of the three with a heavy SvelteKit/vite frontend build, so it is the
-only one that runs into the host's memory ceiling.
+only one of the three with both a heavy SvelteKit/vite frontend build and a
+torch-laden backend stage, so it is the only one that runs into the host's
+memory ceiling — and the only one where those two collide.
 
 ### What the gate checks
 
@@ -274,19 +296,31 @@ It reads `/proc/meminfo` over SSH and logs
 different risks**, which an earlier version wrongly conflated by testing the
 heap against physical memory alone:
 
-| Condition | Result | Why |
-|---|---|---|
-| `MemAvailable + SwapFree` < `NODE_HEAP_MB` + 1 GB | **fails the run** | OOM-kill risk. The kernel has nothing left to reclaim and will kill something — possibly a running staging container |
-| `MemAvailable` < `NODE_HEAP_MB` + 1 GB | warns | The build will swap. Swap averts the OOM-kill but not GC thrash — mark-compact walks the whole heap — so the build may be very slow or exhaust the 45-minute job timeout |
-| otherwise | OK | The heap fits in physical memory |
+| Condition                                         | Result            | Why                                                                                                                                                                      |
+| ------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `MemAvailable + SwapFree` < `NODE_HEAP_MB` + 1 GB | **fails the run** | OOM-kill risk. The kernel has nothing left to reclaim and will kill something — possibly a running staging container                                                     |
+| `MemAvailable` < `NODE_HEAP_MB` + 1 GB            | warns             | The build will swap. Swap averts the OOM-kill but not GC thrash — mark-compact walks the whole heap — so the build may be very slow or exhaust the 45-minute job timeout |
+| otherwise                                         | OK                | The heap fits in physical memory                                                                                                                                         |
 
 `MemAvailable` rather than `MemTotal`, and `SwapFree` rather than `SwapTotal`,
 because only those account for what the running stack already holds. The 1 GB
 of slack over the cap is for node, esbuild's native allocations and vite's
 workers, which all live **outside** the V8 heap the cap governs.
 
-If the gate fails: add RAM to the host, or add swap (disk is not the constraint
-— there is 124 GB free), or lower `NODE_HEAP_MB` with the caveat above.
+On this host at 4096 the gate **warns**: 4226 MB physical is under the 5120 MB it
+wants, so the build swaps a little, carried by the 4 GB of swap. That is expected
+and is not the same thing as the thrash that killed the earlier runs — with the
+stages serialised, the only other claimant on memory is the running stack, whose
+idle pages are exactly what swap is for.
+
+If the gate **fails**: add RAM to the host, or add swap (disk is not the
+constraint — there is 124 GB free). Lowering `NODE_HEAP_MB` is not an option
+here, per the measurement above.
+
+**The durable fix is an 8 GB host.** At 5.3 GB this works, but with no margin:
+every frontend dependency bump eats into it, and the serialisation that makes it
+fit also costs wall-clock. On 8 GB the gate stops warning, the stages could
+overlap again, and the build stops being the most fragile part of the deploy.
 
 ### The `bootstrap` input
 
@@ -372,10 +406,10 @@ The `Verify host preconditions` failure message points here. **The order below
 matters** — the cheap, safe reclaims come first.
 
 1. **`docker builder prune`** — clears BuildKit's layer cache. Safe: destroys no
-   rollback target and no data. It does make the *next* build cold, which is the
+   rollback target and no data. It does make the _next_ build cold, which is the
    very cost this whole arrangement exists to avoid, so prefer step 2 first if
    it frees enough.
-2. **`docker image prune`** (no `-a`) — removes only *dangling* (untagged)
+2. **`docker image prune`** (no `-a`) — removes only _dangling_ (untagged)
    images. Safe: every `:git-<7>` build is tagged, so no rollback target is
    dangling.
 3. **Delete specific old `:git-<7>` tags by hand, oldest first**, keeping the
@@ -400,17 +434,17 @@ matters** — the cheap, safe reclaims come first.
 ## Rolling back
 
 **Rollback is HOST-LOCAL now, and that is a real reduction in safety net.** The
-`:git-<7>` tags exist only in one machine's image store. A `docker image prune
--a` there, or a host rebuild, destroys **every** rollback target with no
-registry copy to fall back on. If you need a build to remain recoverable
-independently of that host, save it deliberately:
+`:git-<7>` tags exist only in one machine's image store. A
+`docker image prune -a` there, or a host rebuild, destroys **every** rollback
+target with no registry copy to fall back on. If you need a build to remain
+recoverable independently of that host, save it deliberately:
 
 ```
 docker save ghcr.io/nature-technologies/trc-open-webui:git-<sha> | zstd -o <somewhere-safe>
 ```
 
 **There is no digest input.** Because every routine deploy already runs the
-immutable tag it just built, rolling back to an *older* build means
+immutable tag it just built, rolling back to an _older_ build means
 re-dispatching the workflow from a branch where the **`Deploy`** step has its
 `OPENWEBUI_IMAGE` env line hardcoded to an older tag instead of the dynamic
 `${{ steps.tags.outputs.sha }}` expression:
@@ -418,7 +452,7 @@ re-dispatching the workflow from a branch where the **`Deploy`** step has its
 1. Confirm the tag you want is still on the host:
    `docker images 'ghcr.io/nature-technologies/trc-open-webui'` over SSH. With
    `pull_policy: never`, a tag that is gone fails the deploy loudly rather than
-   silently fetching something else — but you want to know *before* dispatching.
+   silently fetching something else — but you want to know _before_ dispatching.
 2. Branch off the current `dev` (name it anything that is not `dev`, e.g.
    `rollback/2026-07-27`).
 3. In `.github/workflows/trc-staging-deploy.yml` on that branch, find the
@@ -446,14 +480,14 @@ The environment name is lowercase `staging` — GitHub Actions matches environme
 names case-sensitively, so a `Staging` environment's secrets will not resolve
 here, and every one of them would arrive as the empty string.
 
-| Secret | Notes |
-|---|---|
-| `SSH_PRIVATE_KEY_DEV` | Deploy user's private key |
-| `HOST` | Staging host, used for `ssh-keyscan`, for the job-level `DOCKER_HOST`, and by the plain `ssh`/`scp` calls |
-| `USERNAME` | Deploy user on the host. Needs `docker` group membership — the **build** runs through this account now, not just the deploy |
-| `SSH_PORT` | Optional, defaults to 22. Threaded through every consumer: the `ssh-keyscan` that seeds `known_hosts`, the job-level `DOCKER_HOST`, and the plain `ssh`/`scp` calls — a mismatch would scan one endpoint and then dial another |
-| `HERMES_API_KEY` | **Shared value.** Must be identical to `trc-hermes-agent`'s copy and to Paperclip's third copy in its instance `config.json`. Must be ≥16 characters — below that the gateway refuses to start the API server, so the symptom is connection-refused on :8642, not a 401. Checked before the build |
-| `OPENWEBUI_JWT_SECRET` | **Two-repo secret.** trc-backend calls the same value `IDENTITY_JWT_SECRET` and also needs `ENFORCE_VERIFIED_IDENTITY=true`. Verified by fingerprint comparison, warn-only |
+| Secret                 | Notes                                                                                                                                                                                                                                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SSH_PRIVATE_KEY_DEV`  | Deploy user's private key                                                                                                                                                                                                                                                                         |
+| `HOST`                 | Staging host, used for `ssh-keyscan`, for the job-level `DOCKER_HOST`, and by the plain `ssh`/`scp` calls                                                                                                                                                                                         |
+| `USERNAME`             | Deploy user on the host. Needs `docker` group membership — the **build** runs through this account now, not just the deploy                                                                                                                                                                       |
+| `SSH_PORT`             | Optional, defaults to 22. Threaded through every consumer: the `ssh-keyscan` that seeds `known_hosts`, the job-level `DOCKER_HOST`, and the plain `ssh`/`scp` calls — a mismatch would scan one endpoint and then dial another                                                                    |
+| `HERMES_API_KEY`       | **Shared value.** Must be identical to `trc-hermes-agent`'s copy and to Paperclip's third copy in its instance `config.json`. Must be ≥16 characters — below that the gateway refuses to start the API server, so the symptom is connection-refused on :8642, not a 401. Checked before the build |
+| `OPENWEBUI_JWT_SECRET` | **Two-repo secret.** trc-backend calls the same value `IDENTITY_JWT_SECRET` and also needs `ENFORCE_VERIFIED_IDENTITY=true`. Verified by fingerprint comparison, warn-only                                                                                                                        |
 
 Host keys are **scanned at deploy time**
 (`ssh-keyscan -T 10 -p "$SSH_PORT" -H "$HOST" > "$RUNNER_TEMP/known_hosts"`)
@@ -462,7 +496,7 @@ non-destructively. Trust-on-first-use has the same trade-off it always did:
 
 - It still protects against a passive attacker who cannot intercept the very
   first connection of a run — `StrictHostKeyChecking` is never disabled, so if
-  the host key changes *after* the scan (mid-run, or on a later run against a
+  the host key changes _after_ the scan (mid-run, or on a later run against a
   key swapped since the last scan) the connection aborts rather than silently
   trusting a new key.
 - It does **not** protect against an active machine-in-the-middle present at the
@@ -493,8 +527,8 @@ From the retired build-on-runner, publish-to-GHCR scheme:
   build to a warm one.
 - **Nothing is pushed to or pulled from GHCR.** No `docker login`, no
   `packages: write`, `pull_policy: never` on the service.
-- **Rollback targets are host-local** and are destroyed by `docker image prune
-  -a` or a host rebuild. This is the main cost of the change.
+- **Rollback targets are host-local**, destroyed by `docker image prune -a` or a
+  host rebuild. This is the main cost of the change.
 - **The build competes with the running stack for RAM and disk.** On the runner
   it was isolated. `Dockerfile` now pins the frontend stage's V8 heap (upstream
   ships that line commented out) and the deploy gates on `MemAvailable` before
@@ -534,7 +568,7 @@ For the deploy workflow specifically it asserts:
   references — with no env file, that step's environment is the only source, and
   Compose substitutes an empty string with a mere warning for a plain `${VAR}`;
 - compose is **not** invoked with `--env-file`, `.env.staging` appears nowhere,
-  and there is no `compose pull` — all three were *requirements* under the old
+  and there is no `compose pull` — all three were _requirements_ under the old
   scheme and are defects under this one, so each inverted check carries its
   history inline;
 - the `Write SSH key and scan the host key` step **positively** contains the
@@ -548,12 +582,12 @@ For the deploy workflow specifically it asserts:
   `$RUNNER_TEMP`, so sibling jobs on the same runner can never collide over it;
 - `docker volume create` is only reachable from inside a branch whose
   **enclosing** `if`/`elif` condition tests the `bootstrap` input — checked with
-  an if/elif/else/fi-aware scan, so an unconditional create placed *after* that
+  an if/elif/else/fi-aware scan, so an unconditional create placed _after_ that
   branch's `fi` is still rejected;
 - shell tracing (`set -x` and its spellings) is never enabled, and
   `StrictHostKeyChecking` is never disabled;
 - every heredoc-fed `docker exec` passes `-i`, and no `docker exec` that is
-  *not* heredoc-fed passes `-i` — a heredoc without `-i` gets no stdin, so the
+  _not_ heredoc-fed passes `-i` — a heredoc without `-i` gets no stdin, so the
   smoke test's body never runs and the step still exits 0.
 
 There is deliberately **no** assertion about a cleanup step; see "There is no

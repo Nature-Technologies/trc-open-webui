@@ -91,20 +91,24 @@ env:
   # ubuntu-latest runner in frontend.yaml, and died here with "Ineffective
   # mark-compacts near heap limit" once the build moved onto the deploy host.
   #
-  # Why 3072 rather than 4096: the deploy host is a 5.3 GB VM (measured
-  # MemTotal 5529200 kB) already running the staging stack, which leaves about
-  # 4.1 GB available. 4096 fits there ONLY by swapping, and a swapped V8 heap
-  # thrashes rather than merely slowing -- mark-compact walks the whole heap --
-  # so it would burn the job timeout instead of finishing. 3072 is the largest
-  # cap that fits in PHYSICAL memory on this host.
+  # Why 4096: it is the only cap this build is PROVEN to complete in -- it is
+  # what the 16 GB CI runner effectively gets. 3072 was tried on this host and
+  # died the same way, with the heap pinned at 2997 MB of the 3072 cap and
+  # mark-compact reclaiming ~10 MB a pass (mu = 0.03, i.e. 97% of wall time in
+  # GC). So the requirement is provably above 3 GB and lowering the cap is not
+  # a route that exists.
   #
-  # This is an interim value tied to this host's size, not a tuned optimum. 4096
-  # is what the CI runner effectively gets and is the only cap this build is
-  # actually PROVEN to complete in; raise it back on a host with 8 GB or more.
-  # If 3072 still hits the heap limit, the requirement is provably above 3 GB
-  # and the answer is more RAM, not a smaller number. See
-  # docs/deploy/trc-staging.md.
-  NODE_HEAP_MB: 3072
+  # What makes 4096 viable on a 5.3 GB host (measured MemTotal 5529200 kB,
+  # ~4.1 GB available) is the SERIALISED build below. Stages `build` and `base`
+  # are independent -- nothing joins them until `COPY --from=build` at the end
+  # of the Dockerfile -- so BuildKit ran `npm run build` CONCURRENTLY with
+  # `base`'s torch + sentence-transformers + whisper install. Two multi-GB
+  # workloads on a 4.1 GB host. Building the frontend stage on its own first
+  # gives it the machine, and the full build then finds it cached.
+  #
+  # Still tight: the gate below will WARN that this swaps. Raise the host to
+  # 8 GB and it stops being tight. See docs/deploy/trc-staging.md.
+  NODE_HEAP_MB: 4096
 
 jobs:
   deploy:
@@ -346,6 +350,35 @@ jobs:
           # every dispatch, which is the failure this whole arrangement exists
           # to avoid.
           driver: docker
+
+      # SERIALISES the two heavy stages, and exists for no other reason.
+      #
+      # `build` (the node/vite frontend) and `base` (python, torch,
+      # sentence-transformers, whisper) are INDEPENDENT stages -- nothing joins
+      # them until `COPY --from=build` at the end of the Dockerfile -- so
+      # BuildKit starts both at once and ran a ~4 GB V8 heap alongside a
+      # multi-GB torch install on a host with ~4.1 GB available. That is what
+      # actually killed the frontend build, not the heap cap alone: a 3072 cap
+      # died the same way while `base` was mid-model-download.
+      #
+      # Building `--target build` first gives the frontend stage the machine to
+      # itself. The full build below then finds those layers in this daemon's
+      # cache -- same context, same build-args, same Dockerfile, so it is a cache
+      # hit -- and `base` gets the machine to itself in turn.
+      #
+      # The cost is wall-clock: the stages no longer overlap. That is the point.
+      # No tags: this step exists to populate the layer cache, and the image it
+      # would tag is the same one the next step tags properly.
+      - name: Build the frontend stage alone
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: Dockerfile
+          target: build
+          push: false
+          build-args: |
+            NODE_OPTIONS=--max-old-space-size=${{ env.NODE_HEAP_MB }}
+          provenance: false
 
       - name: Build the image on the deploy server
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0

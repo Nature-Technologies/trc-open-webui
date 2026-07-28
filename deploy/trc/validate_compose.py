@@ -262,6 +262,18 @@ def _step_with_uses_containing(doc: dict, needle: str) -> dict | None:
     return None
 
 
+def _steps_with_uses_containing(doc: dict, needle: str) -> list[dict]:
+    """Every step whose `uses:` value contains `needle`, in file order.
+
+    Plural on purpose. The deploy invokes build-push-action TWICE -- once for the
+    frontend stage alone, to stop BuildKit running it concurrently with the torch
+    install in `base`, and once for the full image. An assertion scoped to only
+    the first would leave the second free to push to a registry or reintroduce a
+    cache backend with nothing complaining.
+    """
+    return [step for step in _steps(doc) if needle in str((step or {}).get("uses") or "")]
+
+
 def _step_env_keys(step: dict | None) -> set[str]:
     return set((step or {}).get("env") or {})
 
@@ -716,12 +728,18 @@ def check_deploy_workflow() -> None:
             "build-on-the-deploy-host flow",
         )
 
-    build_step = _step_with_uses_containing(doc, "docker/build-push-action")
+    build_steps = _steps_with_uses_containing(doc, "docker/build-push-action")
     check(
-        build_step is not None,
+        bool(build_steps),
         "no step uses docker/build-push-action -- build and deploy are "
         "unified in this workflow now that trc-publish.yml is deleted, so "
         "the image must be built here",
+    )
+    check(
+        any(_action_input(step, "tags") for step in build_steps),
+        "no build step sets `tags` -- one of them must tag the image, or the "
+        "Deploy step's OPENWEBUI_IMAGE names something that does not exist and "
+        "`pull_policy: never` fails the deploy closed",
     )
 
     # The build must come AFTER the host preconditions. This ordering only
@@ -747,12 +765,16 @@ def check_deploy_workflow() -> None:
         "build instead of in seconds",
     )
 
-    if build_step is not None:
+    # Applied to EVERY build step, not just the first: the frontend-only build
+    # and the full build are both build-push-action invocations, and either one
+    # pushing or pulling a cache would break the no-registry design.
+    for build_step in build_steps:
+        where = (build_step.get("name") or "unnamed build step")
         push = _action_input(build_step, "push")
         check(
             push is None or push.lower() == "false",
-            f"the build step must set `push: false` (got {push!r}) -- there is "
-            "no registry in this flow and no `docker login` either, so a push "
+            f"build step {where!r} must set `push: false` (got {push!r}) -- there "
+            "is no registry in this flow and no `docker login` either, so a push "
             "would either fail outright or, riding a credential something else "
             "left in the shared ~/.docker/config.json on this runner, publish a "
             "staging image to GHCR that nothing ever deploys",
@@ -760,17 +782,17 @@ def check_deploy_workflow() -> None:
         for cache_key in ("cache-from", "cache-to"):
             check(
                 _action_input(build_step, cache_key) is None,
-                f"the build step must not set `{cache_key}` -- the deploy host "
-                "daemon's own layer store is the cache now, and the `docker` "
-                "buildx driver cannot use an external cache backend such as "
-                "`type=gha` at all",
+                f"build step {where!r} must not set `{cache_key}` -- the deploy "
+                "host daemon's own layer store is the cache now, and the "
+                "`docker` buildx driver cannot use an external cache backend "
+                "such as `type=gha` at all",
             )
         check(
             _action_input(build_step, "platforms") is None,
-            "the build step must not set `platforms` -- it builds natively on "
-            "the deploy host, and naming a platform there risks buildx silently "
-            "switching on QEMU emulation for a build that was fast only because "
-            "it was native",
+            f"build step {where!r} must not set `platforms` -- it builds natively "
+            "on the deploy host, and naming a platform there risks buildx "
+            "silently switching on QEMU emulation for a build that was fast only "
+            "because it was native",
         )
 
     buildx_step = _step_with_uses_containing(doc, "docker/setup-buildx-action")
