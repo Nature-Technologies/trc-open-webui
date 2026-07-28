@@ -223,12 +223,13 @@ it can *see*, so the identical `npm run build` passes with no setting at all on
 the 16 GB `ubuntu-latest` runner in `frontend.yaml` and dies on a smaller host.
 Nothing about the build changed; the machine did.
 
-The deploy pins the cap explicitly. **`NODE_HEAP_MB` in the workflow's
-top-level `env:` is the single source of truth** (4096 today): the build step
-passes it as the `NODE_OPTIONS` build-arg, and `Verify host preconditions`
-derives its memory thresholds from the same number, so tuning it retunes the
-gate that guards it. The `Dockerfile` declares an identical `ARG NODE_OPTIONS`
-default so local builds work unchanged; staging uses the workflow's value.
+The deploy pins the cap explicitly. **`NODE_HEAP_MB` in the workflow's top-level
+`env:` is the single source of truth**: the build step passes it as the
+`NODE_OPTIONS` build-arg, and `Verify host preconditions` derives its memory
+thresholds from the same number, so tuning it retunes the gate that guards it.
+The `Dockerfile` declares its own `ARG NODE_OPTIONS` default of **4096** so
+local builds on an ordinary developer machine work unchanged; staging overrides
+it with the workflow's value, which is lower on purpose — see below.
 
 **Pinning the cap inverts the risk, which is why the gate exists.** A heap cap
 is not a reservation — it stops V8 self-limiting below what vite needs, but it
@@ -240,20 +241,52 @@ the same RAM. BuildKit ignores `--memory`, so there is no container-level cap to
 fall back on: the heap number is the only lever, and the gate is what keeps it
 honest.
 
-The gate reads **`MemAvailable`** from `/proc/meminfo` — not `MemTotal`, since
-only `MemAvailable` accounts for what the running stack already holds — and logs
-`MemTotal`/`MemAvailable`/`SwapTotal` on every run:
+### What the host actually has
 
-| Available memory | Behaviour |
-|---|---|
-| < `NODE_HEAP_MB` + 1 GB (5 GB today) | `Verify host preconditions` **fails** the run |
-| < `NODE_HEAP_MB` + 4 GB (8 GB today) | warns: fits, little slack alongside the stack |
-| more | fine |
+Measured on the first dispatch that reached the gate:
 
-If it fails: free memory on the host, add swap, or lower `NODE_HEAP_MB` — but
-note that too low a cap simply reintroduces the heap-limit build failure, so a
-host that cannot hold both the stack and a ~4 GB build heap needs more RAM, not
-a smaller number.
+```
+MemTotal:      5529200 kB   ~5.3 GiB   -- the entire VM
+MemAvailable:  4327900 kB   ~4.1 GiB   -- after the running stack
+SwapTotal:     4194300 kB   ~4.0 GiB
+```
+
+**The deploy host cannot give this build a 4 GB heap.** Even with the whole
+stack stopped, 4 GB of heap plus node's non-heap allocations is essentially the
+entire machine. `NODE_HEAP_MB` is therefore **3072** — the largest cap that fits
+in *physical* memory here.
+
+Treat 3072 as an interim value tied to this host's size, not a tuned optimum.
+4096 is what the CI runner effectively gets and is the only cap this build is
+*proven* to complete in; **raise it back to 4096 on a host with 8 GB or more.**
+If 3072 still hits the heap limit, the requirement is provably above 3 GB and
+the answer is more RAM, not a smaller number.
+
+Worth knowing why this repo is the outlier: `trc-hermes-agent` and `paperclip`
+build fine on the same host because their builds are light. open-webui is the
+only one of the three with a heavy SvelteKit/vite frontend build, so it is the
+only one that runs into the host's memory ceiling.
+
+### What the gate checks
+
+It reads `/proc/meminfo` over SSH and logs
+`MemTotal`/`MemAvailable`/`SwapTotal`/`SwapFree` on every run. It models **two
+different risks**, which an earlier version wrongly conflated by testing the
+heap against physical memory alone:
+
+| Condition | Result | Why |
+|---|---|---|
+| `MemAvailable + SwapFree` < `NODE_HEAP_MB` + 1 GB | **fails the run** | OOM-kill risk. The kernel has nothing left to reclaim and will kill something — possibly a running staging container |
+| `MemAvailable` < `NODE_HEAP_MB` + 1 GB | warns | The build will swap. Swap averts the OOM-kill but not GC thrash — mark-compact walks the whole heap — so the build may be very slow or exhaust the 45-minute job timeout |
+| otherwise | OK | The heap fits in physical memory |
+
+`MemAvailable` rather than `MemTotal`, and `SwapFree` rather than `SwapTotal`,
+because only those account for what the running stack already holds. The 1 GB
+of slack over the cap is for node, esbuild's native allocations and vite's
+workers, which all live **outside** the V8 heap the cap governs.
+
+If the gate fails: add RAM to the host, or add swap (disk is not the constraint
+— there is 124 GB free), or lower `NODE_HEAP_MB` with the caveat above.
 
 ### The `bootstrap` input
 
