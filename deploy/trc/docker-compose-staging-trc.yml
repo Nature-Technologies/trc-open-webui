@@ -24,6 +24,14 @@ services:
   open-webui:
     image: ${OPENWEBUI_IMAGE:?OPENWEBUI_IMAGE must be set}
     container_name: open-webui
+    # The deploy BUILDS this image on the host's own daemon and never pushes it
+    # to a registry, so there is nothing to pull. Compose's default policy
+    # (`missing`) would pull when the tag is absent locally, which is wrong in
+    # two ways here: on a routine deploy it would hide a build that never
+    # landed behind a GHCR round trip, and on a rollback dispatch naming an
+    # older `:git-<7>` tag it could start whatever GHCR still has under that
+    # tag instead of the copy in this host's store. `never` fails closed.
+    pull_policy: never
     networks: [poc-net, trc-shared]
     restart: unless-stopped
     # No depends_on: hermes-agent. It lives in a different compose project and
