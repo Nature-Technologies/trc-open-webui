@@ -92,6 +92,20 @@ def service_networks(spec: dict) -> set[str]:
     return set(nets)
 
 
+def compose_referenced_vars() -> set[str]:
+    """Every ${VAR} the compose file references.
+
+    Two assertions depend on this set: that .env.staging.example declares all of
+    them (it is the validator's placeholder source and the documented contract),
+    and that the deploy workflow's `Deploy` step binds all of them as its own
+    `env:` -- which, with no env file any more, is the only thing that actually
+    supplies them at deploy time.
+    """
+    return set(
+        re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)", COMPOSE.read_text(encoding="utf-8"))
+    )
+
+
 def check_env_example_declares_every_reference() -> None:
     """Assert every ${VAR} the compose file references is declared in the example.
 
@@ -100,10 +114,7 @@ def check_env_example_declares_every_reference() -> None:
     fail -- an omission from .env.staging.example would silently become a blank
     default. Comparing the two sets directly is what makes it an error.
     """
-    referenced = set(
-        re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)", COMPOSE.read_text(encoding="utf-8"))
-    )
-    missing = sorted(referenced - set(env_example_keys()))
+    missing = sorted(compose_referenced_vars() - set(env_example_keys()))
     check(
         not missing,
         f"compose references {missing} but .env.staging.example does not declare "
@@ -154,9 +165,14 @@ def _strip_inline_comment(line: str) -> str:
     compliance. Only executable lines carry either meaning -- and that cuts
     both ways. A "must not appear" check tripping on a comment is merely
     noisy, but a "must appear" check being SATISFIED by a comment is unsafe:
-    a comment naming `docker logout` after the real line was deleted would
-    let the cleanup-step check stay green while the secret stays on the
-    runner.
+    a comment naming `ssh-keygen -R` after the real line was deleted would
+    let the known_hosts merge check stay green while the deploy silently
+    stopped removing stale host keys.
+
+    This cuts in the newer direction too. The workflow's Deploy step documents
+    in comments that it runs no `compose pull` and passes no `--env-file`;
+    without stripping, those very comments would trip the checks that forbid
+    both.
 
     A `#` inside single or double quotes is not a comment, so quote state is
     tracked rather than cutting at the first `#`.
@@ -246,6 +262,18 @@ def _step_with_uses_containing(doc: dict, needle: str) -> dict | None:
     return None
 
 
+def _steps_with_uses_containing(doc: dict, needle: str) -> list[dict]:
+    """Every step whose `uses:` value contains `needle`, in file order.
+
+    Plural on purpose. The deploy invokes build-push-action TWICE -- once for the
+    frontend stage alone, to stop BuildKit running it concurrently with the torch
+    install in `base`, and once for the full image. An assertion scoped to only
+    the first would leave the second free to push to a registry or reintroduce a
+    cache backend with nothing complaining.
+    """
+    return [step for step in _steps(doc) if needle in str((step or {}).get("uses") or "")]
+
+
 def _step_env_keys(step: dict | None) -> set[str]:
     return set((step or {}).get("env") or {})
 
@@ -333,10 +361,9 @@ def _environment_name(job: dict) -> str | None:
 def _docker_host_values(doc: dict) -> list[tuple[str, str]]:
     """Every DOCKER_HOST value in the workflow, with where it was found.
 
-    Keyed on the exact name `DOCKER_HOST`, so sibling variables that merely
-    start with `DOCKER_` -- notably the job-level `DOCKER_CONFIG` that isolates
-    this job's registry credential and buildx state -- are not collected here
-    and cannot trip the DOCKER_HOST assertions.
+    Keyed on the exact name `DOCKER_HOST`, so any sibling variable that merely
+    starts with `DOCKER_` is not collected here and cannot trip the DOCKER_HOST
+    assertions.
     """
     found: list[tuple[str, str]] = []
     for key, value in (doc.get("env") or {}).items():
@@ -351,6 +378,40 @@ def _docker_host_values(doc: dict) -> list[tuple[str, str]]:
                 if key == "DOCKER_HOST":
                     found.append((f"step {(step or {}).get('name')!r} env", str(value)))
     return found
+
+
+def _steps(doc: dict) -> list[dict]:
+    """Every step of every job, in file order."""
+    out: list[dict] = []
+    for job in (doc.get("jobs") or {}).values():
+        out += [step for step in ((job or {}).get("steps") or []) if step]
+    return out
+
+
+def _step_position(doc: dict, predicate) -> int | None:
+    """The index of the first step satisfying `predicate`, or None.
+
+    Positions are compared rather than merely asserting both steps exist: the
+    host-precondition step is only useful BEFORE the build, and both orderings
+    parse identically.
+    """
+    for index, step in enumerate(_steps(doc)):
+        if predicate(step):
+            return index
+    return None
+
+
+def _action_input(step: dict | None, key: str) -> str | None:
+    """A step's `with:` input as a stripped string, or None when absent.
+
+    Action inputs are strings on the wire, so `push: false` and `push: 'false'`
+    mean the same thing to the action -- but PyYAML gives the first as a bool
+    and the second as a str, and `bool("false")` is True. Every comparison on an
+    action input therefore goes through str(), or a quoted `'true'` would read
+    as disabled.
+    """
+    value = ((step or {}).get("with") or {}).get(key)
+    return None if value is None else str(value).strip()
 
 
 def _docker_exec_is_interactive(line: str) -> bool:
@@ -371,14 +432,20 @@ def _docker_exec_is_interactive(line: str) -> bool:
 def check_deploy_workflow() -> None:
     """Assert the deploy workflow's security and reproducibility invariants.
 
-    These are properties a generic YAML linter cannot know about: that the
-    deploy runs against the staging host's daemon only via step-scoped
-    DOCKER_HOST (never a persistent `docker context`, and never at workflow or
-    job level, which would leak into the build step), that the external volume
-    is verified rather than pre-created, that compose is invoked with
-    --env-file so secrets never hit a shell command string, that a pull always
-    precedes `up -d`, and the ways this workflow could otherwise leak or
-    weaken credentials.
+    These are properties a generic YAML linter cannot know about: that the BUILD
+    and the deploy both run against the staging host's daemon via a JOB-level
+    DOCKER_HOST (never a persistent `docker context`, and never workflow-level),
+    that nothing is pushed to or pulled from a registry, that no secret is ever
+    rendered to a file, that the external volume is verified rather than
+    pre-created, and that the host preconditions are checked before the build
+    rather than after it.
+
+    Four of these assertions are INVERSIONS of what this file required under the
+    retired publish-then-pull scheme, which built on the runner and pushed to
+    GHCR: DOCKER_HOST was required to be step-scoped and absent from the build
+    step, compose was required to be invoked with `--env-file`, and `compose
+    pull` was required to precede `up -d`. All four are now defects, and each
+    inverted check carries the reason inline so the history is not lost.
     """
     check(WORKFLOW.is_file(), f"missing {WORKFLOW}")
     if not WORKFLOW.is_file():
@@ -552,31 +619,45 @@ def check_deploy_workflow() -> None:
         "current, so an active context would build the image on the deploy "
         "host instead of the runner. Use step-scoped DOCKER_HOST instead",
     )
+    # INVERTED, twice over. Under the retired publish-then-pull scheme
+    # `--env-file` was REQUIRED (it kept secrets out of shell command strings)
+    # and `compose pull` before `up -d` was REQUIRED (it stopped a deploy
+    # silently reusing an image already on the host). With the build on the
+    # deploy host and no registry, both are now defects.
+    env_file_calls = [ln.strip() for ln in script_lines if "--env-file" in ln]
     check(
-        any("--env-file" in ln for ln in script_lines),
-        "compose must be invoked with --env-file so secret values are never "
-        "interpolated into a shell command string",
+        not env_file_calls,
+        f"{env_file_calls} passes --env-file, but no env file is rendered any "
+        "more: the Deploy step binds the secrets as its own `env:` and Compose "
+        "resolves the compose file's ${...} references from that process "
+        "environment. Reintroducing one would put every secret on the runner's "
+        "disk AND dotenv-parse it, so a `$`, backtick or `#` in a value would "
+        "reach the container as a DIFFERENT string with nothing erroring",
     )
-    # (line index, character offset within the line) rather than just a line
-    # index: two tuples compare lexicographically, so this also gets a
-    # same-line `docker compose pull && docker compose up -d` right -- with
-    # line index alone, both halves share one index and `min(...) < min(...)`
-    # would compare `i < i` and always be False, even though `pull` runs
-    # first.
-    pull_positions = [
-        (i, ln.find(" pull"))
-        for i, ln in enumerate(script_lines)
-        if "compose" in ln and " pull" in ln
-    ]
-    up_positions = [
-        (i, ln.find("up -d"))
-        for i, ln in enumerate(script_lines)
-        if "compose" in ln and "up -d" in ln
+    check(
+        not any(".env.staging" in ln for ln in script_lines),
+        "no step may write or read `.env.staging` -- secrets reach Compose as "
+        "the Deploy step's process environment now, and nothing this workflow "
+        "does should put them on disk, on the runner or on the server",
+    )
+    pull_calls = [
+        ln.strip()
+        for ln in script_lines
+        if "compose" in ln and re.search(r"\bpull\b", ln)
     ]
     check(
-        bool(pull_positions) and bool(up_positions) and min(pull_positions) < min(up_positions),
-        "`compose pull` must precede `compose up -d`, or a deploy can silently "
-        "run a stale image already present on the host",
+        not pull_calls,
+        f"{pull_calls} runs `compose pull`, but nothing is pushed to a registry "
+        "any more: the build puts the image straight into the deploy host's "
+        "image store, which is the same daemon compose talks to. A pull would "
+        "either fail on a tag GHCR never received, or -- on a rollback dispatch "
+        "naming an older `:git-<7>` tag -- replace the host's copy with "
+        "whatever GHCR still happens to have under that tag",
+    )
+    check(
+        any("compose" in ln and "up -d" in ln for ln in script_lines),
+        "no `compose up -d` anywhere -- the deploy would build an image and "
+        "then never start it",
     )
 
     # The defect class that has cost this project the most, shipped twice in
@@ -600,61 +681,153 @@ def check_deploy_workflow() -> None:
             "NOT pass -i, or it consumes the rest of the enclosing script",
         )
 
-    # DOCKER_HOST must be scoped to individual steps, never the workflow or
-    # the job. Either would also apply to the build step, and buildx binds to
-    # whichever daemon is current -- so the image would build on the deploy
-    # host instead of the runner.
+    # INVERTED. This file used to require DOCKER_HOST to be STEP-scoped, so it
+    # could not reach the build step and the image was built on the runner. The
+    # build now runs on the deploy host DELIBERATELY: buildx's default container
+    # driver starts with an empty cache every dispatch, which made every deploy
+    # a cold 15-45 minute build, and that host daemon's layer store is the only
+    # cache that persists between dispatches. So DOCKER_HOST must be JOB-level
+    # -- every docker call in the job, the build included, talks to that daemon.
     job_level_docker_host = [
         name for name, job in (doc.get("jobs") or {}).items()
         if "DOCKER_HOST" in set(((job or {}).get("env")) or {})
     ]
-    non_step_docker_host = job_level_docker_host + (
-        ["workflow"] if "DOCKER_HOST" in set(doc.get("env") or {}) else []
+    check(
+        len(job_level_docker_host) == len(doc.get("jobs") or {}),
+        f"every job must set DOCKER_HOST as JOB-level `env:` (found only on "
+        f"{job_level_docker_host}) -- the BUILD runs on the deploy host now, "
+        "not just the deploy, so a step-scoped DOCKER_HOST would leave the "
+        "build on the runner, where buildx's cache starts EMPTY on every "
+        "dispatch and every deploy is a cold 15-45 minute build",
     )
     check(
-        not non_step_docker_host,
-        f"DOCKER_HOST must never be set at workflow or job level (found on "
-        f"{non_step_docker_host}) -- either would apply to the build step "
-        "too, and buildx binds to whichever daemon is current, so the image "
-        "would build on the deploy host instead of the runner",
+        "DOCKER_HOST" not in set(doc.get("env") or {}),
+        "DOCKER_HOST must not be set at WORKFLOW level -- job level is the "
+        "correct scope. Workflow level would also apply to any job added later "
+        "that is not this deploy, so a lint or validation job would start "
+        "dialling the staging host for every docker call it makes",
     )
-    # "At least one step has it" is not enough: dropping DOCKER_HOST from
-    # any ONE of these three specifically would silently redirect that
-    # step's docker/compose calls to the runner's own daemon instead of the
-    # deploy host's, while every other DOCKER_HOST-bearing step stays green.
-    # Each is asserted by name.
-    for step_name in ("Verify host preconditions", "Pull and deploy", "Smoke test"):
-        named_step = _step_by_name(doc, step_name)
-        check(
-            named_step is not None,
-            f"no step named {step_name!r} -- expected one of the steps that "
-            "must run against the deploy host's daemon",
-        )
-        if named_step is not None:
-            check(
-                "DOCKER_HOST" in _step_env_keys(named_step),
-                f"the {step_name!r} step must have DOCKER_HOST in its own "
-                "`env:` -- without it this step's docker/compose calls would "
-                "silently run against the runner's own daemon instead of the "
-                "deploy host's",
-            )
+    step_level_docker_host = [
+        step.get("name") for step in _steps(doc) if "DOCKER_HOST" in _step_env_keys(step)
+    ]
+    check(
+        not step_level_docker_host,
+        f"steps {step_level_docker_host} set their own DOCKER_HOST, shadowing "
+        "the job-level one. There must be exactly one source of truth for which "
+        "daemon this job talks to: a step-level override silently sends that one "
+        "step's docker calls elsewhere while every other step stays green",
+    )
 
-    # The build step must run against the runner's OWN daemon, never the
-    # deploy host's -- it must not inherit DOCKER_HOST from anywhere.
-    build_step = _step_with_uses_containing(doc, "docker/build-push-action")
+    # Named steps of this flow. Asserted by name because each carries a property
+    # nothing else does, so a rename that quietly drops one would otherwise
+    # leave the whole file passing.
+    for step_name in ("Verify host preconditions", "Deploy", "Smoke test"):
+        check(
+            _step_by_name(doc, step_name) is not None,
+            f"no step named {step_name!r} -- expected one of the steps of the "
+            "build-on-the-deploy-host flow",
+        )
+
+    build_steps = _steps_with_uses_containing(doc, "docker/build-push-action")
     check(
-        build_step is not None,
+        bool(build_steps),
         "no step uses docker/build-push-action -- build and deploy are "
         "unified in this workflow now that trc-publish.yml is deleted, so "
         "the image must be built here",
     )
-    if build_step is not None:
+    check(
+        any(_action_input(step, "tags") for step in build_steps),
+        "no build step sets `tags` -- one of them must tag the image, or the "
+        "Deploy step's OPENWEBUI_IMAGE names something that does not exist and "
+        "`pull_policy: never` fails the deploy closed",
+    )
+
+    # The build must come AFTER the host preconditions. This ordering only
+    # matters because the build runs on that same host: the precondition step
+    # reads free space on /var/lib/docker, and BuildKit's out-of-space failures
+    # name everything except the cause. Both orderings parse identically, so
+    # positions are compared rather than trusting the file's reading order.
+    precondition_index = _step_position(
+        doc, lambda s: s.get("name") == "Verify host preconditions"
+    )
+    build_index = _step_position(
+        doc, lambda s: "docker/build-push-action" in str(s.get("uses") or "")
+    )
+    check(
+        precondition_index is not None
+        and build_index is not None
+        and precondition_index < build_index,
+        "`Verify host preconditions` must run BEFORE the build step (got "
+        f"positions {precondition_index} and {build_index}) -- the build happens "
+        "on the deploy host, so a reachable daemon and free disk are "
+        "preconditions of the BUILD, not merely of the deploy. In the other "
+        "order an out-of-space host fails obscurely most of an hour into a cold "
+        "build instead of in seconds",
+    )
+
+    # Applied to EVERY build step, not just the first: the frontend-only build
+    # and the full build are both build-push-action invocations, and either one
+    # pushing or pulling a cache would break the no-registry design.
+    for build_step in build_steps:
+        where = (build_step.get("name") or "unnamed build step")
+        push = _action_input(build_step, "push")
         check(
-            "DOCKER_HOST" not in _step_env_keys(build_step),
-            "the docker/build-push-action step must not have DOCKER_HOST in "
-            "its own `env:` -- buildx binds to whichever daemon DOCKER_HOST "
-            "points at, so this would build the image on the deploy host "
-            "instead of the runner",
+            push is None or push.lower() == "false",
+            f"build step {where!r} must set `push: false` (got {push!r}) -- there "
+            "is no registry in this flow and no `docker login` either, so a push "
+            "would either fail outright or, riding a credential something else "
+            "left in the shared ~/.docker/config.json on this runner, publish a "
+            "staging image to GHCR that nothing ever deploys",
+        )
+        for cache_key in ("cache-from", "cache-to"):
+            check(
+                _action_input(build_step, cache_key) is None,
+                f"build step {where!r} must not set `{cache_key}` -- the deploy "
+                "host daemon's own layer store is the cache now, and the "
+                "`docker` buildx driver cannot use an external cache backend "
+                "such as `type=gha` at all",
+            )
+        check(
+            _action_input(build_step, "platforms") is None,
+            f"build step {where!r} must not set `platforms` -- it builds natively "
+            "on the deploy host, and naming a platform there risks buildx "
+            "silently switching on QEMU emulation for a build that was fast only "
+            "because it was native",
+        )
+
+    buildx_step = _step_with_uses_containing(doc, "docker/setup-buildx-action")
+    check(
+        buildx_step is not None,
+        "no step uses docker/setup-buildx-action -- the build needs a builder "
+        "bound to the remote daemon",
+    )
+    if buildx_step is not None:
+        driver = _action_input(buildx_step, "driver")
+        check(
+            driver == "docker",
+            f"setup-buildx-action must use `driver: docker` (got {driver!r}) -- "
+            "that is the remote daemon's OWN builder, reached through the "
+            "job-level DOCKER_HOST. The default `docker-container` driver "
+            "creates a builder container whose cache starts EMPTY on every "
+            "dispatch, which is precisely the cold-build failure this whole "
+            "arrangement exists to avoid",
+        )
+
+    # Nothing else supplies the compose file's ${...} references now that the
+    # env file is gone: Compose reads them from the Deploy step's own process
+    # environment. An omission is SILENT for a plain ${VAR} -- Compose warns and
+    # substitutes an empty string -- and only loud for the ${VAR:?} spellings.
+    deploy_step = _step_by_name(doc, "Deploy")
+    if deploy_step is not None:
+        missing_env = sorted(compose_referenced_vars() - _step_env_keys(deploy_step))
+        check(
+            not missing_env,
+            f"the 'Deploy' step's own `env:` does not declare {missing_env}, "
+            "which the compose file references. With no --env-file, that step's "
+            "process environment is the ONLY source for them -- and Compose "
+            "substitutes an empty string with a mere warning for a plain "
+            "${VAR}, so an omission here is silent unless that particular "
+            "reference happens to use the ${VAR:?} spelling",
         )
 
     keyscan_truncates = [
@@ -748,44 +921,22 @@ def check_deploy_workflow() -> None:
         "per-job ssh-agent instead",
     )
 
-    # Matched against comment-stripped lines, not the raw step text: the raw
-    # text has no comment-stripping at all, so a comment merely NAMING
-    # id_rsa/.env.staging/docker logout (after the real line was deleted)
-    # would satisfy this "must appear" check and leave the validator green
-    # while the secret stays on the runner -- the false-pass shape a
-    # reviewer flagged as the dangerous one.
-    cleanup_step = None
-    for job in (doc.get("jobs") or {}).values():
-        for step in (job or {}).get("steps") or []:
-            if str((step or {}).get("if", "")).strip() != "always()":
-                continue
-            step_text = "\n".join(_script_lines((step or {}).get("run") or ""))
-            if "id_rsa" in step_text and ".env.staging" in step_text and "docker logout" in step_text:
-                cleanup_step = step
-                break
-        if cleanup_step is not None:
-            break
-    check(
-        cleanup_step is not None,
-        "an `if: always()` cleanup step must exist that removes id_rsa and "
-        ".env.staging and logs out of the registry (`docker logout`) -- the "
-        "runner is persistent, so every secret this workflow writes to disk "
-        "must be removed even when an earlier step fails",
-    )
-    if cleanup_step is not None:
-        # Killing the agent was ungated. Deleting $RUNNER_TEMP/id_rsa does not
-        # unload the key: a leaked ssh-agent keeps the DECRYPTED private key in
-        # memory on a persistent runner, reachable by anything that can guess
-        # or read the socket path, for as long as that agent lives -- and a new
-        # one is started on every dispatch.
-        check(
-            "ssh-agent -k" in "\n".join(_script_lines(cleanup_step.get("run") or "")),
-            "the `if: always()` cleanup step must run `ssh-agent -k` -- "
-            "removing the key FILE does not unload the key, and a leaked agent "
-            "holds the decrypted private key in memory on this persistent "
-            "runner until the machine reboots, with one more leaked per "
-            "dispatch",
-        )
+    # There is DELIBERATELY no assertion about an `if: always()` cleanup step
+    # here, and its absence is a decision rather than an oversight. This file
+    # used to require one that removed id_rsa and .env.staging and ran `docker
+    # logout` and `ssh-agent -k`. Two thirds of that became moot with this
+    # flow -- there is no env file and no registry login to clean up -- and the
+    # remaining third was dropped on purpose, to keep this deploy 1:1 with
+    # trc-hermes-agent's, which has no cleanup step at all.
+    #
+    # What that costs, so it is on the record: the key FILE is fine, since it
+    # lives only under $RUNNER_TEMP and the runner clears that at the start of
+    # each job. The per-job ssh-agent is not -- nothing kills it, so it keeps
+    # the DECRYPTED private key in memory on this persistent runner, reachable
+    # by anything that can read its socket path, until the machine reboots, with
+    # one more agent per dispatch. `pkill ssh-agent` on the runner reaps them.
+    # The `~/.ssh/id_rsa` ban above is what still keeps sibling repos' deploys
+    # from colliding over the key, and it is unaffected by any of this.
 
 
 def report() -> int:
@@ -855,6 +1006,17 @@ def main() -> int:
             spec.get("restart") == "unless-stopped",
             f"service {svc!r} must set `restart: unless-stopped` -- there is no "
             "cross-project depends_on, so restart is the only ordering mechanism",
+        )
+        check(
+            spec.get("pull_policy") == "never",
+            f"service {svc!r} must set `pull_policy: never` -- the deploy builds "
+            "this image on the host's own daemon and never pushes it to a "
+            "registry, so Compose's default `missing` policy would reach out to "
+            "GHCR whenever the tag is absent locally. On a routine deploy that "
+            "hides a build which never landed behind a registry round trip; on "
+            "a rollback dispatch naming an older `:git-<7>` tag it can start "
+            "whatever GHCR still has under that tag instead of the copy in this "
+            "host's image store. `never` fails closed instead",
         )
         expected_svc_nets = EXPECTED_SERVICE_NETWORKS.get(svc)
         if expected_svc_nets is not None:

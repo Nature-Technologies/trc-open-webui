@@ -28,7 +28,21 @@ FROM --platform=$BUILDPLATFORM node:22-alpine3.20 AS build
 ARG BUILD_HASH
 
 # Set Node.js options (heap limit Allocation failed - JavaScript heap out of memory)
-# ENV NODE_OPTIONS="--max-old-space-size=4096"
+# TRC: enabled, because V8 sizes its DEFAULT heap from the memory it can see --
+# so this same build passes on a 16 GB CI runner with no setting at all and dies
+# here once it runs on a smaller host. A build-arg, not a hardcode: the right
+# value is a property of the machine building, and the TRC deploy sets it next to
+# the memory gate that makes it safe (see docs/deploy/trc-staging.md).
+#
+# This is a CAP, not a reservation. It stops V8 self-limiting below what vite
+# needs; it does not make memory appear. If the host cannot spare this much the
+# failure becomes a kernel OOM-kill instead -- which is why the deploy checks
+# available memory before building.
+#
+# Scoped to this build stage: the runtime image is a separate FROM and never
+# inherits it.
+ARG NODE_OPTIONS="--max-old-space-size=4096"
+ENV NODE_OPTIONS=${NODE_OPTIONS}
 
 WORKDIR /app
 
