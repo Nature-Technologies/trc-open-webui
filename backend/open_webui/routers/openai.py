@@ -31,6 +31,7 @@ from open_webui.env import (
     ENABLE_FORWARD_USER_INFO_HEADERS,
     ENABLE_OPENAI_API_PASSTHROUGH,
     FORWARD_SESSION_INFO_HEADER_CHAT_ID,
+    FORWARD_SESSION_INFO_HEADER_MESSAGE_ID,
     MODELS_CACHE_TTL,
 )
 from open_webui.internal.db import get_async_session
@@ -174,6 +175,8 @@ async def get_headers_and_cookies(
         headers = include_user_info_headers(headers, user)
         if metadata and metadata.get('chat_id'):
             headers[FORWARD_SESSION_INFO_HEADER_CHAT_ID] = metadata.get('chat_id')
+        if metadata and metadata.get('message_id'):
+            headers[FORWARD_SESSION_INFO_HEADER_MESSAGE_ID] = metadata.get('message_id')
 
     token = None
     auth_type = config.get('auth_type')
