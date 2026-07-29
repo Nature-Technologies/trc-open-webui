@@ -30,6 +30,7 @@ from open_webui.utils.access_control import (
 )
 from open_webui.utils.access_control.files import get_accessible_folder_files
 from open_webui.utils.auth import get_admin_user, get_verified_user
+from open_webui.utils.ragnarok import notify_chat_deleted
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -578,7 +579,17 @@ async def delete_folder_by_id(
 
                 for folder_id in folder_ids:
                     if delete_contents:
-                        await Chats.delete_chats_by_user_id_and_folder_id(folder_owner_id, folder_id, db=db)
+                        # Collect chat ids before deleting them -- afterwards
+                        # they're gone and there's nothing left to list.
+                        chat_ids = await Chats.get_chat_ids_by_user_id_and_folder_id(
+                            folder_owner_id, folder_id, db=db
+                        )
+                        deleted = await Chats.delete_chats_by_user_id_and_folder_id(
+                            folder_owner_id, folder_id, db=db
+                        )
+                        if deleted:
+                            for chat_id in chat_ids:
+                                await notify_chat_deleted(folder_owner_id, chat_id)
                     else:
                         await Chats.move_chats_by_user_id_and_folder_id(folder_owner_id, folder_id, None, db=db)
 

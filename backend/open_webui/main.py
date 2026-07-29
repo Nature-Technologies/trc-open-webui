@@ -245,6 +245,7 @@ from open_webui.utils.oauth import (
     resolve_oauth_client_info,
 )
 from open_webui.utils.plugin import install_tool_and_function_dependencies
+from open_webui.utils.ragnarok import log_startup_status as log_ragnarok_startup_status
 from open_webui.utils.redis import get_redis_client
 from open_webui.utils.security_headers import SecurityHeadersMiddleware
 from open_webui.utils.session_pool import get_session
@@ -309,6 +310,7 @@ async def lifespan(app: FastAPI):
 
     app.state.instance_id = INSTANCE_ID
     start_logger()
+    log_ragnarok_startup_status()
 
     if RESET_CONFIG_ON_START:
         await async_reset_config()

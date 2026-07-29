@@ -2022,6 +2022,14 @@ DEFAULT_ARENA_MODEL = {
 
 WEBHOOK_URL = os.getenv('WEBHOOK_URL', '')
 
+# RAGnarok is this fork's companion backend: it masks PII in chat messages
+# and needs to know promptly when a chat is deleted so it can purge that
+# chat's mappings. Both must be set for the notification hook to be active;
+# see open_webui.utils.ragnarok.
+RAGNAROK_BASE_URL = os.getenv('RAGNAROK_BASE_URL', '')
+
+RAGNAROK_SERVICE_KEY = os.getenv('RAGNAROK_SERVICE_KEY', '')
+
 ENABLE_ADMIN_EXPORT = os.getenv('ENABLE_ADMIN_EXPORT', 'True').lower() == 'true'
 
 ENABLE_ADMIN_WORKSPACE_CONTENT_ACCESS = os.getenv('ENABLE_ADMIN_WORKSPACE_CONTENT_ACCESS', 'True').lower() == 'true'

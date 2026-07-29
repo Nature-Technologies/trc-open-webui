@@ -694,6 +694,7 @@ class UsersTable:
     async def delete_user_by_id(self, id: str, db: AsyncSession | None = None) -> bool:
         from open_webui.models.chats import Chats
         from open_webui.models.groups import Groups
+        from open_webui.utils.ragnarok import notify_user_chats_deleted
 
         # Remove User from Groups
         await Groups.remove_user_from_all_groups(id)
@@ -705,6 +706,7 @@ class UsersTable:
                 return False  # chats deletion failed
             await session.execute(delete(User).where(User.id == id))
             await session.commit()
+            await notify_user_chats_deleted(id)
             return True
 
     async def get_user_api_key_by_id(self, id: str, db: AsyncSession | None = None) -> str | None:

@@ -1901,6 +1901,18 @@ class ChatTable:
         except Exception:
             return False
 
+    async def get_chat_ids_by_user_id_and_folder_id(
+        self, user_id: str, folder_id: str, db: AsyncSession | None = None
+    ) -> list[str]:
+        """List every chat id for user_id in folder_id, with no pinned/archived/limit filtering.
+
+        Mirrors the (unfiltered) selection used by delete_chats_by_user_id_and_folder_id,
+        so a caller can learn exactly which chats a deletion will remove beforehand.
+        """
+        async with get_async_db_context(db) as session:
+            result = await session.execute(select(Chat.id).filter_by(user_id=user_id, folder_id=folder_id))
+            return [row[0] for row in result.all()]
+
     async def delete_chats_by_user_id_and_folder_id(
         self, user_id: str, folder_id: str, db: AsyncSession | None = None
     ) -> bool:
