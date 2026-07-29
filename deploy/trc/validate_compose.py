@@ -25,22 +25,22 @@ from pathlib import Path
 import yaml
 
 HERE = Path(__file__).resolve().parent
-COMPOSE = HERE / "docker-compose-staging-trc.yml"
-ENV_EXAMPLE = HERE / ".env.staging.example"
+COMPOSE = HERE / 'docker-compose-staging-trc.yml'
+ENV_EXAMPLE = HERE / '.env.staging.example'
 
-EXPECTED_PROJECT = "trc-staging-open-webui"
-EXPECTED_NETWORKS = {"poc-net", "trc-shared"}
-EXPECTED_VOLUMES = {"trc-staging-open-webui-data"}
-EXPECTED_CONTAINERS = {"open-webui"}
+EXPECTED_PROJECT = 'trc-staging-open-webui'
+EXPECTED_NETWORKS = {'poc-net', 'trc-shared'}
+EXPECTED_VOLUMES = {'trc-staging-open-webui-data'}
+EXPECTED_CONTAINERS = {'open-webui'}
 # Service-level membership, which is a different assertion from EXPECTED_NETWORKS
 # above. A top-level network that no service joins is silently IGNORED: drop
 # `trc-shared` from the open-webui service's own `networks:` list and this
 # validator, `docker compose config` and `docker compose up` all stay green,
 # while the forwarding filter can no longer reach http://app:8000/redaction/*.
-EXPECTED_SERVICE_NETWORKS = {"open-webui": {"poc-net", "trc-shared"}}
+EXPECTED_SERVICE_NETWORKS = {'open-webui': {'poc-net', 'trc-shared'}}
 # hermes-agent lives in a different compose project, reachable only by
 # container name over poc-net.
-EXPECTED_HERMES_BASE_URL = "http://hermes-agent:8642/v1"
+EXPECTED_HERMES_BASE_URL = 'http://hermes-agent:8642/v1'
 
 failures: list[str] = []
 
@@ -57,24 +57,24 @@ def placeholder(key: str) -> str:
     references, so a generic filler string would fail for `*_BIND` and
     `*_IMAGE` regardless of whether the file is correct.
     """
-    if key.endswith("_IMAGE"):
-        return "ghcr.io/nature-technologies/placeholder@sha256:" + "0" * 64
-    if key.endswith("_BIND"):
-        return "127.0.0.1"
-    if key.endswith("_URL"):
-        return "http://placeholder.invalid:3100"
-    if key.endswith("_DIR") or key.endswith("_PATH"):
-        return "/srv/trc/staging/placeholder"
+    if key.endswith('_IMAGE'):
+        return 'ghcr.io/nature-technologies/placeholder@sha256:' + '0' * 64
+    if key.endswith('_BIND'):
+        return '127.0.0.1'
+    if key.endswith('_URL'):
+        return 'http://placeholder.invalid:3100'
+    if key.endswith('_DIR') or key.endswith('_PATH'):
+        return '/srv/trc/staging/placeholder'
     # 64 chars clears every length guard in the stack, including the gateway's
     # 16-character minimum on HERMES_API_KEY.
-    return "x" * 64
+    return 'x' * 64
 
 
 def env_example_keys() -> list[str]:
     return [
-        line.split("=", 1)[0].strip()
-        for line in ENV_EXAMPLE.read_text(encoding="utf-8").splitlines()
-        if "=" in line and not line.lstrip().startswith("#")
+        line.split('=', 1)[0].strip()
+        for line in ENV_EXAMPLE.read_text(encoding='utf-8').splitlines()
+        if '=' in line and not line.lstrip().startswith('#')
     ]
 
 
@@ -86,7 +86,7 @@ def service_networks(spec: dict) -> set[str]:
     compose and mean the same membership, so both spellings have to be read or
     a reformat could quietly turn the assertion off.
     """
-    nets = (spec or {}).get("networks")
+    nets = (spec or {}).get('networks')
     if nets is None:
         return set()
     return set(nets)
@@ -101,9 +101,7 @@ def compose_referenced_vars() -> set[str]:
     `env:` -- which, with no env file any more, is the only thing that actually
     supplies them at deploy time.
     """
-    return set(
-        re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)", COMPOSE.read_text(encoding="utf-8"))
-    )
+    return set(re.findall(r'\$\{([A-Za-z_][A-Za-z0-9_]*)', COMPOSE.read_text(encoding='utf-8')))
 
 
 def check_env_example_declares_every_reference() -> None:
@@ -117,29 +115,31 @@ def check_env_example_declares_every_reference() -> None:
     missing = sorted(compose_referenced_vars() - set(env_example_keys()))
     check(
         not missing,
-        f"compose references {missing} but .env.staging.example does not declare "
-        "them -- a plain ${VAR} omission would otherwise default to a blank "
-        "string with only a warning from `docker compose config`",
+        f'compose references {missing} but .env.staging.example does not declare '
+        'them -- a plain ${VAR} omission would otherwise default to a blank '
+        'string with only a warning from `docker compose config`',
     )
 
 
 def check_compose_renders() -> None:
     keys = env_example_keys()
-    check(bool(keys), "no assignments found in .env.staging.example")
+    check(bool(keys), 'no assignments found in .env.staging.example')
     if not keys:
         return
-    with tempfile.NamedTemporaryFile(
-        "w", suffix=".env", delete=False, encoding="utf-8"
-    ) as fh:
+    with tempfile.NamedTemporaryFile('w', suffix='.env', delete=False, encoding='utf-8') as fh:
         for key in keys:
-            fh.write(f"{key}={placeholder(key)}\n")
+            fh.write(f'{key}={placeholder(key)}\n')
         env_path = fh.name
     proc = subprocess.run(
         [
-            "docker", "compose",
-            "--env-file", env_path,
-            "-f", str(COMPOSE),
-            "config", "--quiet",
+            'docker',
+            'compose',
+            '--env-file',
+            env_path,
+            '-f',
+            str(COMPOSE),
+            'config',
+            '--quiet',
         ],
         capture_output=True,
         text=True,
@@ -147,13 +147,13 @@ def check_compose_renders() -> None:
     Path(env_path).unlink(missing_ok=True)
     check(
         proc.returncode == 0,
-        "`docker compose config` failed -- rendering the compose file with "
-        "placeholder values for every key in .env.staging.example must "
-        f"succeed, which exercises the `${{VAR:?}}` guards:\n{proc.stderr.strip()}",
+        '`docker compose config` failed -- rendering the compose file with '
+        'placeholder values for every key in .env.staging.example must '
+        f'succeed, which exercises the `${{VAR:?}}` guards:\n{proc.stderr.strip()}',
     )
 
 
-WORKFLOW = HERE.parents[1] / ".github" / "workflows" / "trc-staging-deploy.yml"
+WORKFLOW = HERE.parents[1] / '.github' / 'workflows' / 'trc-staging-deploy.yml'
 
 
 def _strip_inline_comment(line: str) -> str:
@@ -183,7 +183,7 @@ def _strip_inline_comment(line: str) -> str:
             in_single = not in_single
         elif char == '"' and not in_single:
             in_double = not in_double
-        elif char == "#" and not in_single and not in_double:
+        elif char == '#' and not in_single and not in_double:
             # Only a comment when it starts a word -- `foo#bar` is not one.
             if index == 0 or line[index - 1].isspace():
                 return line[:index]
@@ -199,7 +199,7 @@ def _script_lines(script: str) -> list[str]:
     """
     lines: list[str] = []
     for ln in script.splitlines():
-        if not ln.strip() or ln.lstrip().startswith("#"):
+        if not ln.strip() or ln.lstrip().startswith('#'):
             continue
         stripped = _strip_inline_comment(ln)
         if stripped.strip():
@@ -210,9 +210,9 @@ def _script_lines(script: str) -> list[str]:
 def _run_script_lines(doc: dict) -> list[str]:
     """Every executable line of every `run:` block in the workflow, comments dropped."""
     lines: list[str] = []
-    for job in (doc.get("jobs") or {}).values():
-        for step in ((job or {}).get("steps") or []):
-            script = (step or {}).get("run")
+    for job in (doc.get('jobs') or {}).values():
+        for step in (job or {}).get('steps') or []:
+            script = (step or {}).get('run')
             if script:
                 lines += _script_lines(script)
     return lines
@@ -220,7 +220,7 @@ def _run_script_lines(doc: dict) -> list[str]:
 
 def _set_words(line: str) -> list[str] | None:
     """The option words of a `set ...` line, or None if the line is not one."""
-    match = re.match(r"^\s*set\s+(-.*)$", line)
+    match = re.match(r'^\s*set\s+(-.*)$', line)
     return match.group(1).split() if match else None
 
 
@@ -229,20 +229,20 @@ def _enables_tracing(line: str) -> bool:
     if words is None:
         return False
     for index, word in enumerate(words):
-        if word == "-o":
-            if index + 1 < len(words) and words[index + 1] == "xtrace":
+        if word == '-o':
+            if index + 1 < len(words) and words[index + 1] == 'xtrace':
                 return True
             continue
-        if word.startswith("-") and "x" in word.lstrip("-"):
+        if word.startswith('-') and 'x' in word.lstrip('-'):
             return True
     return False
 
 
 def _step_by_name(doc: dict, name: str) -> dict | None:
     """The first step whose `name:` exactly matches, or None."""
-    for job in (doc.get("jobs") or {}).values():
-        for step in (job or {}).get("steps") or []:
-            if (step or {}).get("name") == name:
+    for job in (doc.get('jobs') or {}).values():
+        for step in (job or {}).get('steps') or []:
+            if (step or {}).get('name') == name:
                 return step
     return None
 
@@ -254,9 +254,9 @@ def _step_with_uses_containing(doc: dict, needle: str) -> dict | None:
     than the whole file -- e.g. confirming the build step specifically has no
     DOCKER_HOST, not just that DOCKER_HOST appears somewhere unrelated.
     """
-    for job in (doc.get("jobs") or {}).values():
-        for step in (job or {}).get("steps") or []:
-            uses = (step or {}).get("uses")
+    for job in (doc.get('jobs') or {}).values():
+        for step in (job or {}).get('steps') or []:
+            uses = (step or {}).get('uses')
             if uses and needle in uses:
                 return step
     return None
@@ -271,11 +271,11 @@ def _steps_with_uses_containing(doc: dict, needle: str) -> list[dict]:
     the first would leave the second free to push to a registry or reintroduce a
     cache backend with nothing complaining.
     """
-    return [step for step in _steps(doc) if needle in str((step or {}).get("uses") or "")]
+    return [step for step in _steps(doc) if needle in str((step or {}).get('uses') or '')]
 
 
 def _step_env_keys(step: dict | None) -> set[str]:
-    return set((step or {}).get("env") or {})
+    return set((step or {}).get('env') or {})
 
 
 def _strict_mode_chars(line: str) -> set[str]:
@@ -289,11 +289,11 @@ def _strict_mode_chars(line: str) -> set[str]:
         if skip:
             skip = False
             continue
-        if word == "-o":
+        if word == '-o':
             skip = True
             continue
-        if word.startswith("-"):
-            chars |= set(word.lstrip("-"))
+        if word.startswith('-'):
+            chars |= set(word.lstrip('-'))
     return chars
 
 
@@ -309,7 +309,7 @@ HEREDOC_RE = re.compile(r"<<-?\s*'?[A-Za-z_][A-Za-z0-9_]*'?\s*$")
 # `>>` still matches this regex, but the workflow never appends raw keyscan
 # output directly (it always goes through $RUNNER_TEMP), so that combination
 # does not arise here.
-KEYSCAN_TRUNCATE_RE = re.compile(r"ssh-keyscan\b.*(?:>|\|\s*tee\b).*known_hosts")
+KEYSCAN_TRUNCATE_RE = re.compile(r'ssh-keyscan\b.*(?:>|\|\s*tee\b).*known_hosts')
 
 
 def _writes_default_ssh_key(line: str) -> bool:
@@ -323,7 +323,7 @@ def _writes_default_ssh_key(line: str) -> bool:
     also catches write forms an indicator list would miss, e.g. `dd of=` or
     a heredoc redirected there.
     """
-    return "~/.ssh/id_rsa" in line
+    return '~/.ssh/id_rsa' in line
 
 
 def _runs_on_labels(job: dict) -> list[str]:
@@ -334,11 +334,11 @@ def _runs_on_labels(job: dict) -> list[str]:
     same thing, so all three have to be read or a reformat could quietly turn
     the assertion off.
     """
-    runs_on = (job or {}).get("runs-on")
+    runs_on = (job or {}).get('runs-on')
     if isinstance(runs_on, str):
         return [runs_on]
     if isinstance(runs_on, dict):
-        labels = runs_on.get("labels")
+        labels = runs_on.get('labels')
         if isinstance(labels, str):
             return [labels]
         return [str(x) for x in (labels or [])]
@@ -351,9 +351,9 @@ def _environment_name(job: dict) -> str | None:
     `environment: staging` and `environment: {name: staging, url: ...}` are both
     valid and mean the same thing.
     """
-    environment = (job or {}).get("environment")
+    environment = (job or {}).get('environment')
     if isinstance(environment, dict):
-        name = environment.get("name")
+        name = environment.get('name')
         return None if name is None else str(name)
     return None if environment is None else str(environment)
 
@@ -366,25 +366,25 @@ def _docker_host_values(doc: dict) -> list[tuple[str, str]]:
     assertions.
     """
     found: list[tuple[str, str]] = []
-    for key, value in (doc.get("env") or {}).items():
-        if key == "DOCKER_HOST":
-            found.append(("workflow-level env", str(value)))
-    for job_name, job in (doc.get("jobs") or {}).items():
-        for key, value in (((job or {}).get("env")) or {}).items():
-            if key == "DOCKER_HOST":
-                found.append((f"job {job_name!r} env", str(value)))
-        for step in (job or {}).get("steps") or []:
-            for key, value in (((step or {}).get("env")) or {}).items():
-                if key == "DOCKER_HOST":
-                    found.append((f"step {(step or {}).get('name')!r} env", str(value)))
+    for key, value in (doc.get('env') or {}).items():
+        if key == 'DOCKER_HOST':
+            found.append(('workflow-level env', str(value)))
+    for job_name, job in (doc.get('jobs') or {}).items():
+        for key, value in (((job or {}).get('env')) or {}).items():
+            if key == 'DOCKER_HOST':
+                found.append((f'job {job_name!r} env', str(value)))
+        for step in (job or {}).get('steps') or []:
+            for key, value in (((step or {}).get('env')) or {}).items():
+                if key == 'DOCKER_HOST':
+                    found.append((f'step {(step or {}).get("name")!r} env', str(value)))
     return found
 
 
 def _steps(doc: dict) -> list[dict]:
     """Every step of every job, in file order."""
     out: list[dict] = []
-    for job in (doc.get("jobs") or {}).values():
-        out += [step for step in ((job or {}).get("steps") or []) if step]
+    for job in (doc.get('jobs') or {}).values():
+        out += [step for step in ((job or {}).get('steps') or []) if step]
     return out
 
 
@@ -410,7 +410,7 @@ def _action_input(step: dict | None, key: str) -> str | None:
     action input therefore goes through str(), or a quoted `'true'` would read
     as disabled.
     """
-    value = ((step or {}).get("with") or {}).get(key)
+    value = ((step or {}).get('with') or {}).get(key)
     return None if value is None else str(value).strip()
 
 
@@ -420,11 +420,11 @@ def _docker_exec_is_interactive(line: str) -> bool:
     Flags are the dash-prefixed tokens between `docker exec` and the container
     name, so `-i`, `-it` and `-ti` all count.
     """
-    after = line.split("docker exec", 1)[1].split()
+    after = line.split('docker exec', 1)[1].split()
     for token in after:
-        if not token.startswith("-"):
+        if not token.startswith('-'):
             break
-        if "i" in token.lstrip("-"):
+        if 'i' in token.lstrip('-'):
             return True
     return False
 
@@ -447,19 +447,19 @@ def check_deploy_workflow() -> None:
     pull` was required to precede `up -d`. All four are now defects, and each
     inverted check carries the reason inline so the history is not lost.
     """
-    check(WORKFLOW.is_file(), f"missing {WORKFLOW}")
+    check(WORKFLOW.is_file(), f'missing {WORKFLOW}')
     if not WORKFLOW.is_file():
         return
-    raw = WORKFLOW.read_text(encoding="utf-8")
+    raw = WORKFLOW.read_text(encoding='utf-8')
     doc = yaml.safe_load(raw)
 
     # YAML 1.1 parses the bare key `on` as the boolean True, so read both
     # spellings rather than guessing which one PyYAML lands on.
-    triggers = doc.get("on", doc.get(True)) or {}
+    triggers = doc.get('on', doc.get(True)) or {}
     check(
-        set(triggers) == {"workflow_dispatch"},
-        "deploy must be workflow_dispatch only -- auto-deploy was explicitly "
-        f"rejected; got triggers {sorted(str(t) for t in triggers)}",
+        set(triggers) == {'workflow_dispatch'},
+        'deploy must be workflow_dispatch only -- auto-deploy was explicitly '
+        f'rejected; got triggers {sorted(str(t) for t in triggers)}',
     )
     # The plan's three non-negotiables, none of which was gated before: a
     # mutation test proved `runs-on: ubuntu-latest` + `environment: Staging` +
@@ -467,41 +467,41 @@ def check_deploy_workflow() -> None:
     # The first two fail loudly at runtime; the hardcoded host is the SILENT
     # one -- it would render every application secret and deploy them to
     # whatever machine that literal names.
-    for job_name, job in (doc.get("jobs") or {}).items():
+    for job_name, job in (doc.get('jobs') or {}).items():
         labels = _runs_on_labels(job)
         check(
-            "self-hosted" in labels,
-            f"job {job_name!r} must request the `self-hosted` runner label "
-            f"(got runs-on {labels!r}) -- the staging host is internal and "
-            "unreachable from a GitHub-hosted runner, so `ubuntu-latest` "
-            "fails at the first `ssh-keyscan` after the secrets have already "
-            "been rendered",
+            'self-hosted' in labels,
+            f'job {job_name!r} must request the `self-hosted` runner label '
+            f'(got runs-on {labels!r}) -- the staging host is internal and '
+            'unreachable from a GitHub-hosted runner, so `ubuntu-latest` '
+            'fails at the first `ssh-keyscan` after the secrets have already '
+            'been rendered',
         )
         env_name = _environment_name(job)
         check(
-            env_name == "staging",
-            f"job {job_name!r} must set `environment: staging`, exactly and in "
-            f"lowercase (got {env_name!r}) -- GitHub matches environment names "
-            "CASE-SENSITIVELY, so `Staging` resolves no secrets at all and "
-            "every one of them arrives as the empty string",
+            env_name == 'staging',
+            f'job {job_name!r} must set `environment: staging`, exactly and in '
+            f'lowercase (got {env_name!r}) -- GitHub matches environment names '
+            'CASE-SENSITIVELY, so `Staging` resolves no secrets at all and '
+            'every one of them arrives as the empty string',
         )
 
     docker_hosts = _docker_host_values(doc)
     check(
         bool(docker_hosts),
-        "no DOCKER_HOST is set anywhere -- the deploy would run every "
+        'no DOCKER_HOST is set anywhere -- the deploy would run every '
         "docker/compose call against the runner's own daemon",
     )
     for where, value in docker_hosts:
         check(
-            "secrets.HOST" in value and "secrets.USERNAME" in value,
-            f"the DOCKER_HOST on {where} is {value!r}, which does not "
-            "reference both `secrets.HOST` and `secrets.USERNAME`. Every "
-            "DOCKER_HOST must be built from those secrets so a literal host "
-            "cannot be substituted: a hardcoded value is the one failure in "
-            "this file that is SILENT -- it renders every application secret "
-            "and deploys them to whatever machine that literal names, with "
-            "the smoke tests passing against it",
+            'secrets.HOST' in value and 'secrets.USERNAME' in value,
+            f'the DOCKER_HOST on {where} is {value!r}, which does not '
+            'reference both `secrets.HOST` and `secrets.USERNAME`. Every '
+            'DOCKER_HOST must be built from those secrets so a literal host '
+            'cannot be substituted: a hardcoded value is the one failure in '
+            'this file that is SILENT -- it renders every application secret '
+            'and deploys them to whatever machine that literal names, with '
+            'the smoke tests passing against it',
         )
 
     script_lines = _run_script_lines(doc)
@@ -509,15 +509,14 @@ def check_deploy_workflow() -> None:
     traced = [ln.strip() for ln in script_lines if _enables_tracing(ln)]
     check(
         not traced,
-        f"shell tracing is enabled by {traced} -- tracing prints every secret "
-        "into the run log. This catches `set -x`, `set -eux`, `set -xe`, "
-        "`set -e -u -x` and `set -o xtrace`, while leaving `set -o pipefail` "
-        "alone",
+        f'shell tracing is enabled by {traced} -- tracing prints every secret '
+        'into the run log. This catches `set -x`, `set -eux`, `set -xe`, '
+        '`set -e -u -x` and `set -o xtrace`, while leaving `set -o pipefail` '
+        'alone',
     )
     check(
-        any({"e", "u"} <= _strict_mode_chars(ln) for ln in script_lines),
-        "no `run:` block enables strict mode -- at least one must set both -e "
-        "and -u",
+        any({'e', 'u'} <= _strict_mode_chars(ln) for ln in script_lines),
+        'no `run:` block enables strict mode -- at least one must set both -e and -u',
     )
     # Matched against the comment-stripped script lines, not the raw file
     # text: a raw-text match would trip on a comment that merely NAMES
@@ -525,14 +524,11 @@ def check_deploy_workflow() -> None:
     # and `_run_script_lines`/`_strip_inline_comment` already exist precisely
     # to route every other assertion in this function away from that trap.
     check(
-        not any(
-            "StrictHostKeyChecking=no" in ln or "StrictHostKeyChecking no" in ln
-            for ln in script_lines
-        ),
-        "StrictHostKeyChecking must never be disabled -- host keys are "
-        "scanned at deploy time with `ssh-keyscan` (trust-on-first-use) "
-        "rather than pinned in a secret, so this is the only thing standing "
-        "between a mid-run key change and a silently accepted new key",
+        not any('StrictHostKeyChecking=no' in ln or 'StrictHostKeyChecking no' in ln for ln in script_lines),
+        'StrictHostKeyChecking must never be disabled -- host keys are '
+        'scanned at deploy time with `ssh-keyscan` (trust-on-first-use) '
+        'rather than pinned in a secret, so this is the only thing standing '
+        'between a mid-run key change and a silently accepted new key',
     )
 
     # `docker volume create` is banned UNLESS it is reachable only through a
@@ -555,109 +551,104 @@ def check_deploy_workflow() -> None:
     # whether the CURRENTLY ACTIVE clause of that if-block (the most recent
     # if/elif/else at that depth) tests `bootstrap`; a create only passes
     # while at least one enclosing frame is in its bootstrap-gated clause.
-    for job in (doc.get("jobs") or {}).values():
-        for step in (job or {}).get("steps") or []:
-            script = (step or {}).get("run") or ""
+    for job in (doc.get('jobs') or {}).values():
+        for step in (job or {}).get('steps') or []:
+            script = (step or {}).get('run') or ''
             if not script:
                 continue
             step_lines = _script_lines(script)
             stack: list[bool] = []
             for ln in step_lines:
                 stripped = ln.strip()
-                m = re.match(r"^(if|elif)\b(.*)$", stripped)
+                m = re.match(r'^(if|elif)\b(.*)$', stripped)
                 if m:
                     # Case-insensitive: all three repos now read the input
                     # through an `env: BOOTSTRAP:` binding and test
                     # `[ "$BOOTSTRAP" = "true" ]`, rather than splicing
                     # `${{ inputs.bootstrap }}` into the shell text.
-                    gated = "bootstrap" in stripped.lower()
-                    if m.group(1) == "elif" and stack:
+                    gated = 'bootstrap' in stripped.lower()
+                    if m.group(1) == 'elif' and stack:
                         stack[-1] = gated
                     else:
                         stack.append(gated)
                     continue
-                if re.match(r"^else\b", stripped):
+                if re.match(r'^else\b', stripped):
                     if stack:
                         stack[-1] = False
                     continue
-                if re.match(r"^fi\b", stripped):
+                if re.match(r'^fi\b', stripped):
                     if stack:
                         stack.pop()
                     continue
-                if not re.search(r"\bdocker\s+volume\s+create\b", ln):
+                if not re.search(r'\bdocker\s+volume\s+create\b', ln):
                     continue
                 check(
                     any(stack),
-                    f"{ln.strip()!r} pre-creates a volume on the host "
-                    "reachable OUTSIDE a branch gated on the `bootstrap` "
+                    f'{ln.strip()!r} pre-creates a volume on the host '
+                    'reachable OUTSIDE a branch gated on the `bootstrap` '
                     "input (either never inside one, or after that branch's "
-                    "`fi` already closed it). Compose REFUSES to start when "
-                    "an external volume is missing, and that fail-closed "
-                    "behaviour is the entire point of declaring the volume "
-                    "external: an unconditional create silently turns a loud "
-                    "failure into an EMPTY volume and the run goes green -- "
-                    "and because Open WebUI is published on 0.0.0.0:3000 "
-                    "with signup enabled, the first visitor becomes admin "
-                    "while every smoke test still passes. `docker network "
-                    "create poc-net` is fine and stays unconditional: a "
-                    "network carries no data",
+                    '`fi` already closed it). Compose REFUSES to start when '
+                    'an external volume is missing, and that fail-closed '
+                    'behaviour is the entire point of declaring the volume '
+                    'external: an unconditional create silently turns a loud '
+                    'failure into an EMPTY volume and the run goes green -- '
+                    'and because Open WebUI is published on 0.0.0.0:3000 '
+                    'with signup enabled, the first visitor becomes admin '
+                    'while every smoke test still passes. `docker network '
+                    'create poc-net` is fine and stays unconditional: a '
+                    'network carries no data',
                 )
 
     check(
-        any("docker volume inspect trc-staging-open-webui-data" in ln for ln in script_lines),
-        "the deploy must verify the external volume with `docker volume inspect` "
-        "and refuse to run if it is absent -- Compose fails closed on a missing "
-        "external volume, and pre-creating one would boot the service against a "
-        "silently empty volume with every smoke test still passing",
+        any('docker volume inspect trc-staging-open-webui-data' in ln for ln in script_lines),
+        'the deploy must verify the external volume with `docker volume inspect` '
+        'and refuse to run if it is absent -- Compose fails closed on a missing '
+        'external volume, and pre-creating one would boot the service against a '
+        'silently empty volume with every smoke test still passing',
     )
     check(
-        not any("docker context create" in ln for ln in script_lines),
-        "`docker context create` must appear nowhere -- a context is "
+        not any('docker context create' in ln for ln in script_lines),
+        '`docker context create` must appear nowhere -- a context is '
         "persistent state on a self-hosted runner: `create` fails 'already "
         "exists' on the second run, `use` repoints the runner's default "
-        "daemon for every later job, and buildx binds to whichever daemon is "
-        "current, so an active context would build the image on the deploy "
-        "host instead of the runner. Use step-scoped DOCKER_HOST instead",
+        'daemon for every later job, and buildx binds to whichever daemon is '
+        'current, so an active context would build the image on the deploy '
+        'host instead of the runner. Use step-scoped DOCKER_HOST instead',
     )
     # INVERTED, twice over. Under the retired publish-then-pull scheme
     # `--env-file` was REQUIRED (it kept secrets out of shell command strings)
     # and `compose pull` before `up -d` was REQUIRED (it stopped a deploy
     # silently reusing an image already on the host). With the build on the
     # deploy host and no registry, both are now defects.
-    env_file_calls = [ln.strip() for ln in script_lines if "--env-file" in ln]
+    env_file_calls = [ln.strip() for ln in script_lines if '--env-file' in ln]
     check(
         not env_file_calls,
-        f"{env_file_calls} passes --env-file, but no env file is rendered any "
-        "more: the Deploy step binds the secrets as its own `env:` and Compose "
+        f'{env_file_calls} passes --env-file, but no env file is rendered any '
+        'more: the Deploy step binds the secrets as its own `env:` and Compose '
         "resolves the compose file's ${...} references from that process "
         "environment. Reintroducing one would put every secret on the runner's "
-        "disk AND dotenv-parse it, so a `$`, backtick or `#` in a value would "
-        "reach the container as a DIFFERENT string with nothing erroring",
+        'disk AND dotenv-parse it, so a `$`, backtick or `#` in a value would '
+        'reach the container as a DIFFERENT string with nothing erroring',
     )
     check(
-        not any(".env.staging" in ln for ln in script_lines),
-        "no step may write or read `.env.staging` -- secrets reach Compose as "
+        not any('.env.staging' in ln for ln in script_lines),
+        'no step may write or read `.env.staging` -- secrets reach Compose as '
         "the Deploy step's process environment now, and nothing this workflow "
-        "does should put them on disk, on the runner or on the server",
+        'does should put them on disk, on the runner or on the server',
     )
-    pull_calls = [
-        ln.strip()
-        for ln in script_lines
-        if "compose" in ln and re.search(r"\bpull\b", ln)
-    ]
+    pull_calls = [ln.strip() for ln in script_lines if 'compose' in ln and re.search(r'\bpull\b', ln)]
     check(
         not pull_calls,
-        f"{pull_calls} runs `compose pull`, but nothing is pushed to a registry "
+        f'{pull_calls} runs `compose pull`, but nothing is pushed to a registry '
         "any more: the build puts the image straight into the deploy host's "
-        "image store, which is the same daemon compose talks to. A pull would "
-        "either fail on a tag GHCR never received, or -- on a rollback dispatch "
+        'image store, which is the same daemon compose talks to. A pull would '
+        'either fail on a tag GHCR never received, or -- on a rollback dispatch '
         "naming an older `:git-<7>` tag -- replace the host's copy with "
-        "whatever GHCR still happens to have under that tag",
+        'whatever GHCR still happens to have under that tag',
     )
     check(
-        any("compose" in ln and "up -d" in ln for ln in script_lines),
-        "no `compose up -d` anywhere -- the deploy would build an image and "
-        "then never start it",
+        any('compose' in ln and 'up -d' in ln for ln in script_lines),
+        'no `compose up -d` anywhere -- the deploy would build an image and then never start it',
     )
 
     # The defect class that has cost this project the most, shipped twice in
@@ -669,16 +660,16 @@ def check_deploy_workflow() -> None:
     # `_run_script_lines` drops full-line comments, so prose mentioning
     # `docker exec` cannot trip this.
     for ln in script_lines:
-        if "docker exec" not in ln:
+        if 'docker exec' not in ln:
             continue
         fed = bool(HEREDOC_RE.search(ln))
         interactive = _docker_exec_is_interactive(ln)
         check(
             fed == interactive,
-            f"`docker exec` mismatch on: {ln.strip()!r} -- a heredoc-fed call "
-            "MUST pass -i or no stdin reaches the container, the body never "
-            "runs and the step exits 0; a call that is NOT heredoc-fed must "
-            "NOT pass -i, or it consumes the rest of the enclosing script",
+            f'`docker exec` mismatch on: {ln.strip()!r} -- a heredoc-fed call '
+            'MUST pass -i or no stdin reaches the container, the body never '
+            'runs and the step exits 0; a call that is NOT heredoc-fed must '
+            'NOT pass -i, or it consumes the rest of the enclosing script',
         )
 
     # INVERTED. This file used to require DOCKER_HOST to be STEP-scoped, so it
@@ -689,57 +680,53 @@ def check_deploy_workflow() -> None:
     # cache that persists between dispatches. So DOCKER_HOST must be JOB-level
     # -- every docker call in the job, the build included, talks to that daemon.
     job_level_docker_host = [
-        name for name, job in (doc.get("jobs") or {}).items()
-        if "DOCKER_HOST" in set(((job or {}).get("env")) or {})
+        name for name, job in (doc.get('jobs') or {}).items() if 'DOCKER_HOST' in set(((job or {}).get('env')) or {})
     ]
     check(
-        len(job_level_docker_host) == len(doc.get("jobs") or {}),
-        f"every job must set DOCKER_HOST as JOB-level `env:` (found only on "
-        f"{job_level_docker_host}) -- the BUILD runs on the deploy host now, "
-        "not just the deploy, so a step-scoped DOCKER_HOST would leave the "
+        len(job_level_docker_host) == len(doc.get('jobs') or {}),
+        f'every job must set DOCKER_HOST as JOB-level `env:` (found only on '
+        f'{job_level_docker_host}) -- the BUILD runs on the deploy host now, '
+        'not just the deploy, so a step-scoped DOCKER_HOST would leave the '
         "build on the runner, where buildx's cache starts EMPTY on every "
-        "dispatch and every deploy is a cold 15-45 minute build",
+        'dispatch and every deploy is a cold 15-45 minute build',
     )
     check(
-        "DOCKER_HOST" not in set(doc.get("env") or {}),
-        "DOCKER_HOST must not be set at WORKFLOW level -- job level is the "
-        "correct scope. Workflow level would also apply to any job added later "
-        "that is not this deploy, so a lint or validation job would start "
-        "dialling the staging host for every docker call it makes",
+        'DOCKER_HOST' not in set(doc.get('env') or {}),
+        'DOCKER_HOST must not be set at WORKFLOW level -- job level is the '
+        'correct scope. Workflow level would also apply to any job added later '
+        'that is not this deploy, so a lint or validation job would start '
+        'dialling the staging host for every docker call it makes',
     )
-    step_level_docker_host = [
-        step.get("name") for step in _steps(doc) if "DOCKER_HOST" in _step_env_keys(step)
-    ]
+    step_level_docker_host = [step.get('name') for step in _steps(doc) if 'DOCKER_HOST' in _step_env_keys(step)]
     check(
         not step_level_docker_host,
-        f"steps {step_level_docker_host} set their own DOCKER_HOST, shadowing "
-        "the job-level one. There must be exactly one source of truth for which "
-        "daemon this job talks to: a step-level override silently sends that one "
+        f'steps {step_level_docker_host} set their own DOCKER_HOST, shadowing '
+        'the job-level one. There must be exactly one source of truth for which '
+        'daemon this job talks to: a step-level override silently sends that one '
         "step's docker calls elsewhere while every other step stays green",
     )
 
     # Named steps of this flow. Asserted by name because each carries a property
     # nothing else does, so a rename that quietly drops one would otherwise
     # leave the whole file passing.
-    for step_name in ("Verify host preconditions", "Deploy", "Smoke test"):
+    for step_name in ('Verify host preconditions', 'Deploy', 'Smoke test'):
         check(
             _step_by_name(doc, step_name) is not None,
-            f"no step named {step_name!r} -- expected one of the steps of the "
-            "build-on-the-deploy-host flow",
+            f'no step named {step_name!r} -- expected one of the steps of the build-on-the-deploy-host flow',
         )
 
-    build_steps = _steps_with_uses_containing(doc, "docker/build-push-action")
+    build_steps = _steps_with_uses_containing(doc, 'docker/build-push-action')
     check(
         bool(build_steps),
-        "no step uses docker/build-push-action -- build and deploy are "
-        "unified in this workflow now that trc-publish.yml is deleted, so "
-        "the image must be built here",
+        'no step uses docker/build-push-action -- build and deploy are '
+        'unified in this workflow now that trc-publish.yml is deleted, so '
+        'the image must be built here',
     )
     check(
-        any(_action_input(step, "tags") for step in build_steps),
-        "no build step sets `tags` -- one of them must tag the image, or the "
+        any(_action_input(step, 'tags') for step in build_steps),
+        'no build step sets `tags` -- one of them must tag the image, or the '
         "Deploy step's OPENWEBUI_IMAGE names something that does not exist and "
-        "`pull_policy: never` fails the deploy closed",
+        '`pull_policy: never` fails the deploy closed',
     )
 
     # The build must come AFTER the host preconditions. This ordering only
@@ -747,102 +734,94 @@ def check_deploy_workflow() -> None:
     # reads free space on /var/lib/docker, and BuildKit's out-of-space failures
     # name everything except the cause. Both orderings parse identically, so
     # positions are compared rather than trusting the file's reading order.
-    precondition_index = _step_position(
-        doc, lambda s: s.get("name") == "Verify host preconditions"
-    )
-    build_index = _step_position(
-        doc, lambda s: "docker/build-push-action" in str(s.get("uses") or "")
-    )
+    precondition_index = _step_position(doc, lambda s: s.get('name') == 'Verify host preconditions')
+    build_index = _step_position(doc, lambda s: 'docker/build-push-action' in str(s.get('uses') or ''))
     check(
-        precondition_index is not None
-        and build_index is not None
-        and precondition_index < build_index,
-        "`Verify host preconditions` must run BEFORE the build step (got "
-        f"positions {precondition_index} and {build_index}) -- the build happens "
-        "on the deploy host, so a reachable daemon and free disk are "
-        "preconditions of the BUILD, not merely of the deploy. In the other "
-        "order an out-of-space host fails obscurely most of an hour into a cold "
-        "build instead of in seconds",
+        precondition_index is not None and build_index is not None and precondition_index < build_index,
+        '`Verify host preconditions` must run BEFORE the build step (got '
+        f'positions {precondition_index} and {build_index}) -- the build happens '
+        'on the deploy host, so a reachable daemon and free disk are '
+        'preconditions of the BUILD, not merely of the deploy. In the other '
+        'order an out-of-space host fails obscurely most of an hour into a cold '
+        'build instead of in seconds',
     )
 
     # Applied to EVERY build step, not just the first: the frontend-only build
     # and the full build are both build-push-action invocations, and either one
     # pushing or pulling a cache would break the no-registry design.
     for build_step in build_steps:
-        where = (build_step.get("name") or "unnamed build step")
-        push = _action_input(build_step, "push")
+        where = build_step.get('name') or 'unnamed build step'
+        push = _action_input(build_step, 'push')
         check(
-            push is None or push.lower() == "false",
-            f"build step {where!r} must set `push: false` (got {push!r}) -- there "
-            "is no registry in this flow and no `docker login` either, so a push "
-            "would either fail outright or, riding a credential something else "
-            "left in the shared ~/.docker/config.json on this runner, publish a "
-            "staging image to GHCR that nothing ever deploys",
+            push is None or push.lower() == 'false',
+            f'build step {where!r} must set `push: false` (got {push!r}) -- there '
+            'is no registry in this flow and no `docker login` either, so a push '
+            'would either fail outright or, riding a credential something else '
+            'left in the shared ~/.docker/config.json on this runner, publish a '
+            'staging image to GHCR that nothing ever deploys',
         )
-        for cache_key in ("cache-from", "cache-to"):
+        for cache_key in ('cache-from', 'cache-to'):
             check(
                 _action_input(build_step, cache_key) is None,
-                f"build step {where!r} must not set `{cache_key}` -- the deploy "
+                f'build step {where!r} must not set `{cache_key}` -- the deploy '
                 "host daemon's own layer store is the cache now, and the "
-                "`docker` buildx driver cannot use an external cache backend "
-                "such as `type=gha` at all",
+                '`docker` buildx driver cannot use an external cache backend '
+                'such as `type=gha` at all',
             )
         check(
-            _action_input(build_step, "platforms") is None,
-            f"build step {where!r} must not set `platforms` -- it builds natively "
-            "on the deploy host, and naming a platform there risks buildx "
-            "silently switching on QEMU emulation for a build that was fast only "
-            "because it was native",
+            _action_input(build_step, 'platforms') is None,
+            f'build step {where!r} must not set `platforms` -- it builds natively '
+            'on the deploy host, and naming a platform there risks buildx '
+            'silently switching on QEMU emulation for a build that was fast only '
+            'because it was native',
         )
 
-    buildx_step = _step_with_uses_containing(doc, "docker/setup-buildx-action")
+    buildx_step = _step_with_uses_containing(doc, 'docker/setup-buildx-action')
     check(
         buildx_step is not None,
-        "no step uses docker/setup-buildx-action -- the build needs a builder "
-        "bound to the remote daemon",
+        'no step uses docker/setup-buildx-action -- the build needs a builder bound to the remote daemon',
     )
     if buildx_step is not None:
-        driver = _action_input(buildx_step, "driver")
+        driver = _action_input(buildx_step, 'driver')
         check(
-            driver == "docker",
-            f"setup-buildx-action must use `driver: docker` (got {driver!r}) -- "
+            driver == 'docker',
+            f'setup-buildx-action must use `driver: docker` (got {driver!r}) -- '
             "that is the remote daemon's OWN builder, reached through the "
-            "job-level DOCKER_HOST. The default `docker-container` driver "
-            "creates a builder container whose cache starts EMPTY on every "
-            "dispatch, which is precisely the cold-build failure this whole "
-            "arrangement exists to avoid",
+            'job-level DOCKER_HOST. The default `docker-container` driver '
+            'creates a builder container whose cache starts EMPTY on every '
+            'dispatch, which is precisely the cold-build failure this whole '
+            'arrangement exists to avoid',
         )
 
     # Nothing else supplies the compose file's ${...} references now that the
     # env file is gone: Compose reads them from the Deploy step's own process
     # environment. An omission is SILENT for a plain ${VAR} -- Compose warns and
     # substitutes an empty string -- and only loud for the ${VAR:?} spellings.
-    deploy_step = _step_by_name(doc, "Deploy")
+    deploy_step = _step_by_name(doc, 'Deploy')
     if deploy_step is not None:
         missing_env = sorted(compose_referenced_vars() - _step_env_keys(deploy_step))
         check(
             not missing_env,
             f"the 'Deploy' step's own `env:` does not declare {missing_env}, "
             "which the compose file references. With no --env-file, that step's "
-            "process environment is the ONLY source for them -- and Compose "
-            "substitutes an empty string with a mere warning for a plain "
-            "${VAR}, so an omission here is silent unless that particular "
-            "reference happens to use the ${VAR:?} spelling",
+            'process environment is the ONLY source for them -- and Compose '
+            'substitutes an empty string with a mere warning for a plain '
+            '${VAR}, so an omission here is silent unless that particular '
+            'reference happens to use the ${VAR:?} spelling',
         )
 
     keyscan_truncates = [
-        ln.strip() for ln in script_lines
-        if KEYSCAN_TRUNCATE_RE.search(ln) and "RUNNER_TEMP" not in ln
+        ln.strip() for ln in script_lines if KEYSCAN_TRUNCATE_RE.search(ln) and 'RUNNER_TEMP' not in ln
     ]
     check(
         not keyscan_truncates,
-        f"{keyscan_truncates} writes `ssh-keyscan` output directly onto "
-        "known_hosts (via `>` or piped through `tee`), which either "
-        "TRUNCATES the file or skips the `ssh-keygen -R` stale-entry removal "
-        "-- ~/.ssh/known_hosts persists between jobs on a self-hosted "
-        "runner, so entries already there are not ours to delete or "
-        "duplicate. Scan into $RUNNER_TEMP first, remove any stale entry for "
-        "this host with `ssh-keygen -R`, then append (`>>`)",
+        f'{keyscan_truncates} writes `ssh-keyscan` output directly onto '
+        'known_hosts (via `>` or piped through `tee`), which either '
+        'TRUNCATES the file or skips the `ssh-keygen -R` stale-entry removal '
+        '-- ~/.ssh/known_hosts persists between jobs on a self-hosted '
+        'runner, so entries already there are not ours to delete or '
+        'duplicate. Scan into $RUNNER_TEMP first, remove any stale entry for '
+        'this host with `ssh-keygen -R`, then append (`>>`)',
     )
 
     # The negative guard above is NEGATIVE ONLY, which makes it much weaker
@@ -852,58 +831,50 @@ def check_deploy_workflow() -> None:
     # are what actually require the non-destructive merge to exist, and they
     # are scoped to the SSH-setup step by name rather than to the flattened
     # cross-step line list, so a stray `>>` somewhere else cannot satisfy them.
-    ssh_step_name = "Write SSH key and scan the host key"
+    ssh_step_name = 'Write SSH key and scan the host key'
     ssh_step = _step_by_name(doc, ssh_step_name)
     check(
         ssh_step is not None,
-        f"no step named {ssh_step_name!r} -- the deploy must scan the host key "
-        "into $RUNNER_TEMP and merge it into ~/.ssh/known_hosts before any "
-        "ssh/scp/DOCKER_HOST call",
+        f'no step named {ssh_step_name!r} -- the deploy must scan the host key '
+        'into $RUNNER_TEMP and merge it into ~/.ssh/known_hosts before any '
+        'ssh/scp/DOCKER_HOST call',
     )
     if ssh_step is not None:
-        ssh_lines = _script_lines(ssh_step.get("run") or "")
+        ssh_lines = _script_lines(ssh_step.get('run') or '')
         check(
-            any("ssh-keyscan" in ln and "RUNNER_TEMP" in ln for ln in ssh_lines),
-            f"the {ssh_step_name!r} step must run `ssh-keyscan` into a file "
-            "under $RUNNER_TEMP -- the scan has to land in job-scoped scratch "
-            "space first so the merge into the shared ~/.ssh/known_hosts can "
-            "be non-destructive",
+            any('ssh-keyscan' in ln and 'RUNNER_TEMP' in ln for ln in ssh_lines),
+            f'the {ssh_step_name!r} step must run `ssh-keyscan` into a file '
+            'under $RUNNER_TEMP -- the scan has to land in job-scoped scratch '
+            'space first so the merge into the shared ~/.ssh/known_hosts can '
+            'be non-destructive',
         )
         check(
-            any(
-                re.search(r"\btest\s+-s\b", ln) and "RUNNER_TEMP" in ln
-                for ln in ssh_lines
-            ),
-            f"the {ssh_step_name!r} step must `test -s` the scanned file under "
-            "$RUNNER_TEMP -- `ssh-keyscan` exits 0 even when nothing answered, "
-            "so without this the run continues with an EMPTY known_hosts and "
-            "fails much later, after the build, on a confusing host-key error",
+            any(re.search(r'\btest\s+-s\b', ln) and 'RUNNER_TEMP' in ln for ln in ssh_lines),
+            f'the {ssh_step_name!r} step must `test -s` the scanned file under '
+            '$RUNNER_TEMP -- `ssh-keyscan` exits 0 even when nothing answered, '
+            'so without this the run continues with an EMPTY known_hosts and '
+            'fails much later, after the build, on a confusing host-key error',
         )
-        keygen_removals = [
-            ln for ln in ssh_lines if re.search(r"\bssh-keygen\s+-R\b", ln)
-        ]
-        bracketed = [ln for ln in keygen_removals if "[" in ln]
-        bare = [ln for ln in keygen_removals if "[" not in ln]
+        keygen_removals = [ln for ln in ssh_lines if re.search(r'\bssh-keygen\s+-R\b', ln)]
+        bracketed = [ln for ln in keygen_removals if '[' in ln]
+        bare = [ln for ln in keygen_removals if '[' not in ln]
         check(
             len(keygen_removals) >= 2 and bool(bracketed) and bool(bare),
-            f"the {ssh_step_name!r} step must call `ssh-keygen -R` TWICE, once "
-            "for the bare host and once for the `[host]:port` spelling (found "
-            f"{len(keygen_removals)}: {len(bare)} bare, {len(bracketed)} "
-            "bracketed) -- `ssh-keyscan` writes a bare host for port 22 and "
-            "`[host]:port` otherwise, so removing only one spelling leaves a "
-            "stale key that makes StrictHostKeyChecking abort the deploy after "
-            "a host rebuild",
+            f'the {ssh_step_name!r} step must call `ssh-keygen -R` TWICE, once '
+            'for the bare host and once for the `[host]:port` spelling (found '
+            f'{len(keygen_removals)}: {len(bare)} bare, {len(bracketed)} '
+            'bracketed) -- `ssh-keyscan` writes a bare host for port 22 and '
+            '`[host]:port` otherwise, so removing only one spelling leaves a '
+            'stale key that makes StrictHostKeyChecking abort the deploy after '
+            'a host rebuild',
         )
         check(
-            any(
-                ">>" in ln and "known_hosts" in ln and "~/.ssh" in ln
-                for ln in ssh_lines
-            ),
-            f"the {ssh_step_name!r} step must APPEND (`>>`) the scanned key "
-            "onto ~/.ssh/known_hosts -- without the append the scan never "
-            "reaches the file ssh actually reads, and with `>` instead it "
-            "would truncate entries sibling jobs on this persistent runner "
-            "rely on",
+            any('>>' in ln and 'known_hosts' in ln and '~/.ssh' in ln for ln in ssh_lines),
+            f'the {ssh_step_name!r} step must APPEND (`>>`) the scanned key '
+            'onto ~/.ssh/known_hosts -- without the append the scan never '
+            'reaches the file ssh actually reads, and with `>` instead it '
+            'would truncate entries sibling jobs on this persistent runner '
+            'rely on',
         )
 
     # The private key must never land in ~/.ssh -- this runner is shared
@@ -914,11 +885,11 @@ def check_deploy_workflow() -> None:
     # per-job ssh-agent.
     check(
         not any(_writes_default_ssh_key(ln) for ln in script_lines),
-        "the private key must never be written to ~/.ssh/id_rsa -- this "
-        "runner is shared with sibling jobs and reused across them, so a "
+        'the private key must never be written to ~/.ssh/id_rsa -- this '
+        'runner is shared with sibling jobs and reused across them, so a '
         "shared key file lets one job's cleanup delete the key a sibling is "
-        "mid-deploy with. Write it under $RUNNER_TEMP and load it into a "
-        "per-job ssh-agent instead",
+        'mid-deploy with. Write it under $RUNNER_TEMP and load it into a '
+        'per-job ssh-agent instead',
     )
 
     # There is DELIBERATELY no assertion about an `if: always()` cleanup step
@@ -941,116 +912,116 @@ def check_deploy_workflow() -> None:
 
 def report() -> int:
     if failures:
-        print(f"{len(failures)} check(s) failed:", file=sys.stderr)
+        print(f'{len(failures)} check(s) failed:', file=sys.stderr)
         for failure in failures:
-            print(f"  - {failure}", file=sys.stderr)
+            print(f'  - {failure}', file=sys.stderr)
         return 1
-    print("all TRC deploy checks passed")
+    print('all TRC deploy checks passed')
     return 0
 
 
 def main() -> int:
-    check(COMPOSE.is_file(), f"missing {COMPOSE}")
-    check(ENV_EXAMPLE.is_file(), f"missing {ENV_EXAMPLE}")
+    check(COMPOSE.is_file(), f'missing {COMPOSE}')
+    check(ENV_EXAMPLE.is_file(), f'missing {ENV_EXAMPLE}')
     if failures:
         return report()
 
-    doc = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    doc = yaml.safe_load(COMPOSE.read_text(encoding='utf-8'))
 
     check(
-        doc.get("name") == EXPECTED_PROJECT,
-        f"top-level `name:` must be {EXPECTED_PROJECT!r}, got {doc.get('name')!r}",
+        doc.get('name') == EXPECTED_PROJECT,
+        f'top-level `name:` must be {EXPECTED_PROJECT!r}, got {doc.get("name")!r}',
     )
 
-    networks = doc.get("networks") or {}
+    networks = doc.get('networks') or {}
     check(
         set(networks) == EXPECTED_NETWORKS,
-        f"networks must be exactly {sorted(EXPECTED_NETWORKS)}, got {sorted(networks)}",
+        f'networks must be exactly {sorted(EXPECTED_NETWORKS)}, got {sorted(networks)}',
     )
     for name, spec in networks.items():
         check(
-            bool((spec or {}).get("external")),
-            f"network {name!r} must declare `external: true` -- no single "
-            "compose project owns creation of a shared bridge",
+            bool((spec or {}).get('external')),
+            f'network {name!r} must declare `external: true` -- no single '
+            'compose project owns creation of a shared bridge',
         )
 
-    volumes = doc.get("volumes") or {}
+    volumes = doc.get('volumes') or {}
     check(
         set(volumes) == EXPECTED_VOLUMES,
-        f"volumes must be exactly {sorted(EXPECTED_VOLUMES)}, got {sorted(volumes)}",
+        f'volumes must be exactly {sorted(EXPECTED_VOLUMES)}, got {sorted(volumes)}',
     )
     for name, spec in volumes.items():
         check(
-            bool((spec or {}).get("external")),
-            f"volume {name!r} must declare `external: true` -- see this "
+            bool((spec or {}).get('external')),
+            f'volume {name!r} must declare `external: true` -- see this '
             "module's docstring for the silent-data-loss failure this prevents",
         )
 
-    services = doc.get("services") or {}
-    container_names = {spec.get("container_name") for spec in services.values()}
+    services = doc.get('services') or {}
+    container_names = {spec.get('container_name') for spec in services.values()}
     check(
         container_names == EXPECTED_CONTAINERS,
-        f"container_name set must be exactly {sorted(EXPECTED_CONTAINERS)}, "
-        f"got {sorted(n for n in container_names if n)}",
+        f'container_name set must be exactly {sorted(EXPECTED_CONTAINERS)}, '
+        f'got {sorted(n for n in container_names if n)}',
     )
 
     check(
         set(services) == set(EXPECTED_SERVICE_NETWORKS),
-        f"services must be exactly {sorted(EXPECTED_SERVICE_NETWORKS)}, got "
-        f"{sorted(services)} -- every service needs an entry in "
-        "EXPECTED_SERVICE_NETWORKS or its network membership goes unasserted",
+        f'services must be exactly {sorted(EXPECTED_SERVICE_NETWORKS)}, got '
+        f'{sorted(services)} -- every service needs an entry in '
+        'EXPECTED_SERVICE_NETWORKS or its network membership goes unasserted',
     )
 
     for svc, spec in services.items():
         check(
-            spec.get("restart") == "unless-stopped",
-            f"service {svc!r} must set `restart: unless-stopped` -- there is no "
-            "cross-project depends_on, so restart is the only ordering mechanism",
+            spec.get('restart') == 'unless-stopped',
+            f'service {svc!r} must set `restart: unless-stopped` -- there is no '
+            'cross-project depends_on, so restart is the only ordering mechanism',
         )
         check(
-            spec.get("pull_policy") == "never",
-            f"service {svc!r} must set `pull_policy: never` -- the deploy builds "
+            spec.get('pull_policy') == 'never',
+            f'service {svc!r} must set `pull_policy: never` -- the deploy builds '
             "this image on the host's own daemon and never pushes it to a "
             "registry, so Compose's default `missing` policy would reach out to "
-            "GHCR whenever the tag is absent locally. On a routine deploy that "
-            "hides a build which never landed behind a registry round trip; on "
-            "a rollback dispatch naming an older `:git-<7>` tag it can start "
-            "whatever GHCR still has under that tag instead of the copy in this "
+            'GHCR whenever the tag is absent locally. On a routine deploy that '
+            'hides a build which never landed behind a registry round trip; on '
+            'a rollback dispatch naming an older `:git-<7>` tag it can start '
+            'whatever GHCR still has under that tag instead of the copy in this '
             "host's image store. `never` fails closed instead",
         )
         expected_svc_nets = EXPECTED_SERVICE_NETWORKS.get(svc)
         if expected_svc_nets is not None:
             check(
                 service_networks(spec) == expected_svc_nets,
-                f"service {svc!r} must join exactly "
-                f"{sorted(expected_svc_nets)}, got "
-                f"{sorted(service_networks(spec))} -- a top-level network no "
-                "service joins is silently ignored, so dropping one from this "
-                "list leaves the validator, `docker compose config` and `up` "
-                "all green while the container can no longer resolve the peers "
-                "it needs",
+                f'service {svc!r} must join exactly '
+                f'{sorted(expected_svc_nets)}, got '
+                f'{sorted(service_networks(spec))} -- a top-level network no '
+                'service joins is silently ignored, so dropping one from this '
+                'list leaves the validator, `docker compose config` and `up` '
+                'all green while the container can no longer resolve the peers '
+                'it needs',
             )
-        for dep in spec.get("depends_on") or {}:
+        for dep in spec.get('depends_on') or {}:
             check(
                 dep in services,
-                f"service {svc!r} declares depends_on {dep!r}, which is not in "
-                "this compose project -- depends_on cannot cross projects",
+                f'service {svc!r} declares depends_on {dep!r}, which is not in '
+                'this compose project -- depends_on cannot cross projects',
             )
 
-    env = (services.get("open-webui") or {}).get("environment") or {}
+    env = (services.get('open-webui') or {}).get('environment') or {}
     check(
-        env.get("OPENAI_API_BASE_URL") == EXPECTED_HERMES_BASE_URL,
-        "OPENAI_API_BASE_URL must be "
-        f"{EXPECTED_HERMES_BASE_URL!r} -- hermes-agent is in another compose "
-        f"project and resolves only by container name; got "
-        f"{env.get('OPENAI_API_BASE_URL')!r}",
+        env.get('OPENAI_API_BASE_URL') == EXPECTED_HERMES_BASE_URL,
+        'OPENAI_API_BASE_URL must be '
+        f'{EXPECTED_HERMES_BASE_URL!r} -- hermes-agent is in another compose '
+        f'project and resolves only by container name; got '
+        f'{env.get("OPENAI_API_BASE_URL")!r}',
     )
     check(
-        str(env.get("ENABLE_PERSISTENT_CONFIG")) == "False",
-        "ENABLE_PERSISTENT_CONFIG must be \"False\" -- otherwise a stale "
-        "connection row in the carried-over data volume outranks "
-        "OPENAI_API_BASE_URL/OPENAI_API_KEY and chat stays broken after a "
-        "recreate",
+        str(env.get('ENABLE_PERSISTENT_CONFIG')) == 'False',
+        'ENABLE_PERSISTENT_CONFIG must be "False" -- otherwise a stale '
+        'connection row in the carried-over data volume outranks '
+        'OPENAI_API_BASE_URL/OPENAI_API_KEY and chat stays broken after a '
+        'recreate',
     )
 
     check_env_example_declares_every_reference()
@@ -1059,5 +1030,5 @@ def main() -> int:
     return report()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     sys.exit(main())
