@@ -306,6 +306,52 @@ class TestBatchBudget:
                 await task
 
 
+class TestUnexpectedBatchFailureIsSwallowed:
+    """notify_chats_deleted used to catch only TimeoutError. Anything else
+    escaping it propagates into folders.py's `except Exception`, which
+    returns HTTP 400 -- but by the time this hook runs, the folder/chat rows
+    are already committed and every access grant already revoked, so that
+    response would tell the client a successful deletion failed. Nothing
+    plausible raises here today (_notify already swallows a single call's
+    own failures); this guards the fail-safe shape regardless."""
+
+    @pytest.mark.asyncio
+    async def test_a_non_timeout_exception_from_the_batch_loop_does_not_raise(self, monkeypatch):
+        async def _boom(user_id, chat_id):
+            raise RuntimeError('unexpected failure inside the per-call helper')
+
+        monkeypatch.setattr(ragnarok, 'notify_chat_deleted', _boom)
+
+        # Must complete without raising.
+        await ragnarok.notify_chats_deleted('user-1', ['chat-a', 'chat-b'])
+
+    @pytest.mark.asyncio
+    async def test_the_unexpected_failure_is_logged_at_warning(self, monkeypatch, caplog):
+        async def _boom(user_id, chat_id):
+            raise RuntimeError('unexpected failure inside the per-call helper')
+
+        monkeypatch.setattr(ragnarok, 'notify_chat_deleted', _boom)
+
+        with caplog.at_level(logging.WARNING, logger='open_webui.utils.ragnarok'):
+            await ragnarok.notify_chats_deleted('user-1', ['chat-a'])
+
+        assert any(record.levelno == logging.WARNING for record in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_cancellation_is_still_not_swallowed_here_either(self, monkeypatch):
+        """The broadened except must stay narrower than BaseException, or a
+        real cancellation (shutdown, client disconnect) would be absorbed by
+        a best-effort assist instead of propagating."""
+
+        async def _boom(user_id, chat_id):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(ragnarok, 'notify_chat_deleted', _boom)
+
+        with pytest.raises(asyncio.CancelledError):
+            await ragnarok.notify_chats_deleted('user-1', ['chat-a'])
+
+
 class TestStartupLogging:
     def test_logs_enabled_when_configured(self, caplog):
         with caplog.at_level(logging.INFO, logger='open_webui.utils.ragnarok'):

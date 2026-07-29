@@ -192,6 +192,22 @@ async def notify_chats_deleted(user_id: str, chat_ids: Iterable[str]) -> None:
             notified,
             len(chat_ids),
         )
+    except Exception as e:
+        # This call runs after the folder/chat rows are deleted and every
+        # access grant is already revoked (see folders.py), so anything that
+        # escapes here must not become the caller's HTTP 400 -- that would
+        # tell the client a successful deletion failed. _notify already
+        # swallows a single call's failures; this is the same fail-safe
+        # shape for whatever isn't a per-call failure, mirroring
+        # Chats.get_chat_ids_by_user_id_and_folder_id on the same path.
+        # Nothing plausible raises here today; RAGnarok's reconciling sweep
+        # remains the source of truth regardless.
+        log.warning(
+            'RAGnarok batch notification failed unexpectedly after %d of %d chats: %s',
+            notified,
+            len(chat_ids),
+            _redact_url_credentials(str(e)),
+        )
 
 
 async def notify_user_chats_deleted(user_id: str) -> None:
