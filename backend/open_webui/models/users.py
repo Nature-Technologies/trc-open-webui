@@ -706,8 +706,13 @@ class UsersTable:
                 return False  # chats deletion failed
             await session.execute(delete(User).where(User.id == id))
             await session.commit()
-            await notify_user_chats_deleted(id)
-            return True
+
+        # Deliberately outside the session block: this is a remote HTTP call,
+        # and holding a checked-out DB session across one is how a slow
+        # RAGnarok turns into pool exhaustion. Everything above is committed,
+        # so nothing here can affect the outcome.
+        await notify_user_chats_deleted(id)
+        return True
 
     async def get_user_api_key_by_id(self, id: str, db: AsyncSession | None = None) -> str | None:
         async with get_async_db_context(db) as session:

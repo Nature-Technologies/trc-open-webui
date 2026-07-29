@@ -16,13 +16,16 @@ from open_webui.models.users import Users
 
 
 class _FakeSessionContext:
-    def __init__(self, session):
+    def __init__(self, session, call_order=None):
         self._session = session
+        self._call_order = call_order
 
     async def __aenter__(self):
         return self._session
 
     async def __aexit__(self, exc_type, exc, tb):
+        if self._call_order is not None:
+            self._call_order.append('session_released')
         return False
 
 
@@ -70,6 +73,33 @@ class TestDeleteUserById:
         assert result is False
         mock_notify.assert_not_awaited()
         session.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_notifies_after_the_db_session_is_released(self):
+        """The notification is a remote HTTP call. Making it inside the
+        `async with get_async_db_context(...)` block holds a checked-out DB
+        session for the length of that call, which under a slow RAGnarok is
+        how a pool gets exhausted. Everything is committed by then, so there
+        is nothing to gain by staying inside."""
+        call_order = []
+        session = _fake_db_session()
+
+        async def _notify(user_id):
+            call_order.append('notify')
+
+        with (
+            patch('open_webui.models.groups.Groups.remove_user_from_all_groups', new=AsyncMock()),
+            patch('open_webui.models.chats.Chats.delete_chats_by_user_id', new=AsyncMock(return_value=True)),
+            patch('open_webui.utils.ragnarok.notify_user_chats_deleted', new=_notify),
+            patch(
+                'open_webui.models.users.get_async_db_context',
+                return_value=_FakeSessionContext(session, call_order),
+            ),
+        ):
+            result = await Users.delete_user_by_id('user-1')
+
+        assert result is True
+        assert call_order == ['session_released', 'notify']
 
     @pytest.mark.asyncio
     async def test_survives_ragnarok_failure_and_still_reports_success(self):
