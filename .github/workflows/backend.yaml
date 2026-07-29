@@ -41,3 +41,44 @@ jobs:
 
       - name: Detect logic errors
         run: ruff check --select=F --ignore=F401,F403,F405,F541,F811,F841 --output-format=github .
+
+  # ── Backend unit tests -- fast lane, no external services ────────────────
+  # Regression guard for backend/open_webui/utils/ragnarok.py and the
+  # folders.py deletion hook: without this job, nothing in CI ran
+  # `backend/open_webui/test` at all, so a fix like the folder-deletion
+  # Critical (an unbounded loop that could skip access-grant revocation on
+  # cancellation) had only local test runs standing between it and a silent
+  # regression on the next merge conflict in that file.
+  test:
+    name: Backend Tests (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # backend/requirements.txt, not `pip install -e .`: installing the
+      # project itself invokes hatch_build.py's custom hook, which runs a
+      # full `npm install` + frontend build on every install -- dead weight
+      # for a Python-only test job. requirements.txt is the same pinned set
+      # the Docker image installs from, so this stays reproducible without
+      # that cost.
+      #
+      # This is still a full install of the backend's dependency graph, not
+      # a light one: even these narrow unit tests transitively import
+      # chromadb, torch, transformers and sentence-transformers by the time
+      # open_webui.routers.folders and open_webui.config are reachable, so
+      # there is no smaller subset that actually collects. Measured
+      # locally: ~2 minutes to install, ~15s to run once warm.
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt "pytest-asyncio>=1.0.0"
+
+      - name: Run backend unit tests
+        run: python -m pytest backend/open_webui/test -q

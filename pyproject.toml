@@ -214,6 +214,7 @@ ignore-words-list = 'ans'
 
 [dependency-groups]
 dev = [
+    "pytest~=8.3.2",
     "pytest-asyncio>=1.0.0",
     "ruff>=0.15.5",
 ]
