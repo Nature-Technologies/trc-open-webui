@@ -373,7 +373,11 @@ jobs:
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
-          file: Dockerfile
+          # TRC's own copy of the root Dockerfile, so the root one can stay
+          # byte-identical to upstream and a fork sync never conflicts. Both
+          # build steps must name the SAME file or they stop sharing layers and
+          # this prebuild serialises nothing. validate_compose.py asserts it.
+          file: deploy/trc/Dockerfile
           target: build
           push: false
           build-args: |
@@ -384,7 +388,8 @@ jobs:
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
-          file: Dockerfile
+          # Same file as the prebuild above -- see the note there.
+          file: deploy/trc/Dockerfile
           # No registry: built straight into the deploy host's image store,
           # which is the same daemon `docker compose up -d` talks to below.
           push: false

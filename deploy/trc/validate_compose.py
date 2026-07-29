@@ -16,6 +16,7 @@ Run: python deploy/trc/validate_compose.py
 
 from __future__ import annotations
 
+import hashlib
 import re
 import subprocess
 import sys
@@ -41,6 +42,26 @@ EXPECTED_SERVICE_NETWORKS = {'open-webui': {'poc-net', 'trc-shared'}}
 # hermes-agent lives in a different compose project, reachable only by
 # container name over poc-net.
 EXPECTED_HERMES_BASE_URL = 'http://hermes-agent:8642/v1'
+
+# The TRC build files. `deploy/trc/Dockerfile` is a COPY of the repository-root
+# Dockerfile plus the TRC deltas, kept out of the root so that a fork sync from
+# open-webui/open-webui never conflicts there. That trade is only safe because
+# of the hash pin below: a merge conflict is loud, a stale copy is silent.
+TRC_DOCKERFILE = HERE / 'Dockerfile'
+TRC_DOCKERIGNORE = HERE / 'Dockerfile.dockerignore'
+UPSTREAM_DOCKERFILE = HERE.parents[1] / 'Dockerfile'
+EXPECTED_BUILD_DOCKERFILE = 'deploy/trc/Dockerfile'
+# SHA-256 of the ROOT Dockerfile with line endings normalised to LF, as of the
+# last time deploy/trc/Dockerfile was synced from it. Normalised because the
+# repo sets no `eol` attribute for it: a Windows checkout has CRLF in the
+# working tree and LF in the index, so raw bytes would hash differently on a
+# developer machine and on the runner, and the pin would be useless on one of
+# them.
+#
+# To re-pin after an upstream change, re-apply the TRC deltas to
+# deploy/trc/Dockerfile and then:
+#   python -c "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('Dockerfile').read_bytes().replace(b'\r\n',b'\n')).hexdigest())"
+EXPECTED_UPSTREAM_DOCKERFILE_SHA256 = '242789dfbc58d41a3528b9490e93a6b73955cadb097475c6549faf243d89d167'
 
 failures: list[str] = []
 
@@ -429,6 +450,108 @@ def _docker_exec_is_interactive(line: str) -> bool:
     return False
 
 
+def _lf_bytes(path: Path) -> bytes:
+    """File bytes with CRLF collapsed to LF, so a hash of them is platform-stable."""
+    return path.read_bytes().replace(b'\r\n', b'\n')
+
+
+def check_trc_dockerfile() -> None:
+    """The TRC build files, and the pin that keeps the copy from rotting.
+
+    The staging deploy builds from deploy/trc/Dockerfile, not the root one, so
+    that the root file stays byte-identical to upstream and a fork sync never
+    conflicts there. The cost of that is real and is what this function exists
+    to pay: upstream can change its Dockerfile -- a new system dependency, a
+    reordered stage, a CVE fix -- and this copy would go on building the old
+    thing with nothing anywhere failing.
+
+    So the root Dockerfile's content is PINNED. When a fork sync changes it,
+    this check goes red and names the job: re-apply the TRC deltas to the copy,
+    then re-pin. Treat it as the merge conflict you would otherwise have had.
+    """
+    check(TRC_DOCKERFILE.is_file(), f'missing {TRC_DOCKERFILE}')
+    check(TRC_DOCKERIGNORE.is_file(), f'missing {TRC_DOCKERIGNORE}')
+    check(UPSTREAM_DOCKERFILE.is_file(), f'missing {UPSTREAM_DOCKERFILE}')
+    if failures:
+        return
+
+    actual = hashlib.sha256(_lf_bytes(UPSTREAM_DOCKERFILE)).hexdigest()
+    check(
+        actual == EXPECTED_UPSTREAM_DOCKERFILE_SHA256,
+        f'the root Dockerfile has changed (sha256 {actual}, pinned '
+        f'{EXPECTED_UPSTREAM_DOCKERFILE_SHA256}). deploy/trc/Dockerfile is a '
+        'COPY of it plus the TRC deltas, and nothing else notices when the two '
+        'drift -- the staging build simply keeps using the old file and stays '
+        'green. Diff the root Dockerfile against what you have here, carry the '
+        'change across, then re-pin EXPECTED_UPSTREAM_DOCKERFILE_SHA256 in this '
+        'module. If the root change is one the staging build must NOT take, say '
+        'so in a comment beside the pin and re-pin anyway',
+    )
+
+    trc_text = TRC_DOCKERFILE.read_text(encoding='utf-8')
+    trc_lines = trc_text.splitlines()
+
+    # `RUN --mount=` and every other BuildKit-only construct below need the
+    # syntax directive, and it is only honoured as the FIRST line of the file.
+    # A header comment inserted above it silently downgrades the frontend and
+    # the cache mount becomes a parse error.
+    check(
+        bool(trc_lines) and trc_lines[0].startswith('# syntax='),
+        'deploy/trc/Dockerfile must keep `# syntax=` as its literal FIRST line '
+        f'(got {(trc_lines[0] if trc_lines else "")!r}) -- the directive is '
+        'ignored anywhere else, which turns the `RUN --mount` cache mount below '
+        'from an optimisation into a parse error',
+    )
+
+    # The three TRC deltas. Asserted individually because the failure they
+    # guard against is someone "resyncing" this file by copying the root one
+    # over it: the build still works, it just silently costs a full vite
+    # rebuild on every deploy again, which is the exact thing this file exists
+    # to stop.
+    frontend_stage = trc_text.split('######## WebUI backend ########')[0]
+    check(
+        not re.search(r'^COPY \. \.$', frontend_stage, re.M),
+        "deploy/trc/Dockerfile's frontend stage is back to upstream's `COPY . "
+        '.`, which pulls backend/, deploy/ and everything else into a stage '
+        'that reads none of it -- so a backend-only commit invalidates the '
+        '`npm run build` layer and pays for a full vite rebuild on the deploy '
+        'host, which is the single most expensive step of the deploy and the '
+        'reason this copy exists. Enumerate the frontend inputs instead',
+    )
+    check(
+        'COPY src ./src' in frontend_stage,
+        "deploy/trc/Dockerfile's frontend stage must COPY its inputs by name "
+        '(src, static, scripts, the config files, CHANGELOG.md) -- the list '
+        'must also cover everything the runtime stage lifts back out with '
+        '`COPY --from=build`, which is why CHANGELOG.md is on it despite no '
+        'build step reading it',
+    )
+    check(
+        '--mount=type=cache' in frontend_stage,
+        "deploy/trc/Dockerfile's `npm ci` must keep its "
+        '`--mount=type=cache,target=/root/.npm` -- without it a '
+        'package-lock.json change refetches the whole dependency tree over the '
+        "network instead of unpacking it from the host daemon's build cache",
+    )
+    check(
+        re.search(r'^ARG NODE_OPTIONS=', frontend_stage, re.M) is not None,
+        'deploy/trc/Dockerfile must keep `ARG NODE_OPTIONS=` in the frontend '
+        'stage (upstream ships the ENV commented out) -- V8 sizes its default '
+        'heap from the memory it can see, and without the cap this build dies '
+        'on the deploy host with "Ineffective mark-compacts near heap limit" '
+        'while passing on any large CI runner',
+    )
+
+    check(
+        re.search(r'^\.git$', TRC_DOCKERIGNORE.read_text(encoding='utf-8'), re.M) is not None,
+        f'{TRC_DOCKERIGNORE.name} must exclude `.git` -- it is ~400 MB in this '
+        'repo and the build context is tarred and streamed over SSH to the '
+        'deploy host once per build step, twice per deploy. BuildKit prefers '
+        'this file over the context-root .dockerignore and does not merge them, '
+        'so a rule dropped here is simply gone',
+    )
+
+
 def check_deploy_workflow() -> None:
     """Assert the deploy workflow's security and reproducibility invariants.
 
@@ -751,6 +874,18 @@ def check_deploy_workflow() -> None:
     # pushing or pulling a cache would break the no-registry design.
     for build_step in build_steps:
         where = build_step.get('name') or 'unnamed build step'
+        dockerfile = _action_input(build_step, 'file')
+        check(
+            dockerfile == EXPECTED_BUILD_DOCKERFILE,
+            f'build step {where!r} must set `file: {EXPECTED_BUILD_DOCKERFILE}` '
+            f'(got {dockerfile!r}) -- the ROOT Dockerfile is deliberately left '
+            'byte-identical to upstream and carries none of the TRC deltas, so '
+            'pointing a build step at it silently gives up the enumerated '
+            'frontend COPY and the npm cache mount: every deploy pays for a '
+            'full vite rebuild again and nothing fails. Both build steps must '
+            'also name the SAME file, or the prebuild populates layers the real '
+            'build cannot use and serialises the two heavy stages for nothing',
+        )
         push = _action_input(build_step, 'push')
         check(
             push is None or push.lower() == 'false',
@@ -1026,6 +1161,7 @@ def main() -> int:
 
     check_env_example_declares_every_reference()
     check_compose_renders()
+    check_trc_dockerfile()
     check_deploy_workflow()
     return report()
 

@@ -289,6 +289,81 @@ only one of the three with both a heavy SvelteKit/vite frontend build and a
 torch-laden backend stage, so it is the only one that runs into the host's
 memory ceiling — and the only one where those two collide.
 
+## The staging build uses `deploy/trc/Dockerfile`, not the root one
+
+Both build steps set `file: deploy/trc/Dockerfile`. That file is a **copy** of
+the repository-root `Dockerfile` plus the TRC deltas, and it exists so the root
+file can stay **byte-identical to upstream** — a fork sync from
+`open-webui/open-webui` then never conflicts there, and every other consumer
+(upstream CI, `docker-compose.yaml`, a local `docker build .`) keeps using the
+root file unchanged. Ignore rules live beside it in
+`deploy/trc/Dockerfile.dockerignore`, which BuildKit prefers over the
+context-root `.dockerignore` and does **not** merge with it, so that file is a
+full copy rather than an overlay.
+
+The cost is the thing to understand: **a merge conflict is loud, a stale copy is
+silent.** Upstream can add a system dependency, reorder a stage or land a CVE fix
+and this copy would go on building the old thing with nothing failing anywhere.
+So `validate_compose.py` pins the SHA-256 of the root `Dockerfile` (line endings
+normalised to LF, since a Windows checkout has CRLF in the working tree and LF in
+the index). The moment a fork sync changes it, **TRC deploy checks go red** and
+name the job: carry the change across to `deploy/trc/Dockerfile`, then re-pin
+`EXPECTED_UPSTREAM_DOCKERFILE_SHA256`. Treat that failure as the merge conflict
+you would otherwise have had. `Dockerfile` is in the **`paths:`** filter of
+`trc-deploy-checks.yml` for exactly this reason — a fork sync touches only that
+path, and without it the one event the pin exists to catch would not run the pin.
+
+### Why the frontend stage copies a file list, not `.`
+
+The layer cache above only pays for itself if the expensive layer can actually
+_hit_ it, and for a long time the frontend layer never did — every deploy paid
+for a full `npm run build`, the most expensive step there is on a host that
+swaps to run it.
+
+Two causes, both fixed, both worth not reintroducing:
+
+- **`.git` was in the build context.** It is ~400 MB here, and its contents
+  change on every commit — so the context digest changed on every commit, and
+  the frontend stage's `COPY` was invalidated whether or not a frontend file
+  moved. `Dockerfile.dockerignore` excludes it now. That also stops ~400 MB
+  being tarred and streamed over the SSH channel **twice** per deploy, once for
+  each of the two build steps above.
+- **The frontend stage did `COPY . .`,** which is upstream's spelling and pulls
+  the whole context — `backend/`, `deploy/`, `pyproject.toml` — into a stage
+  that reads none of it. A backend-only commit therefore rebuilt the frontend.
+  The TRC copy enumerates the frontend's actual inputs instead.
+
+The enumerated list must cover everything `npm run build` reads **and**
+everything the runtime stage lifts back out with `COPY --from=build` — which is
+why `CHANGELOG.md` is on it although no build step reads it. Adding a top-level
+input the frontend needs means adding it to that list; the failure mode is a
+loud missing file at build time, not a silent one.
+
+**Behaviour change from dropping `.git`:** `svelte.config.js` derives SvelteKit's
+version string from `git rev-parse HEAD` and falls back to the `package.json`
+version when git is absent, so that string no longer changes per commit. It
+drives the poll-and-offer-reload mechanic and nothing else. This is the same
+trade the deploy workflow already makes deliberately when it records the commit
+as an image **label** rather than passing `BUILD_HASH` as a build-arg — and
+keeping `.git` in the context had quietly defeated that decision anyway.
+
+`npm ci` also gets a `--mount=type=cache` on npm's download cache, which
+persists in the host daemon's build cache: a `package-lock.json` change
+reinstalls from local tarballs instead of refetching the tree over the network.
+
+Expect the **first** deploy after this change to rebuild the frontend stage
+once — the instructions themselves changed, so those layers miss. The `base`
+stage is unaffected; it is independent and keyed on `backend/requirements.txt`.
+
+`validate_compose.py` guards all of this, because every failure mode here is a
+silent one — the build stays green and simply goes back to costing a full vite
+rebuild. It asserts that both build steps name `deploy/trc/Dockerfile`, that the
+root Dockerfile still hashes to the pin, that the TRC copy keeps `# syntax=` as
+its literal first line (the directive is ignored anywhere else, which would turn
+the cache mount into a parse error), that its frontend stage has not reverted to
+`COPY . .`, that the enumerated `COPY`, the cache mount and `ARG NODE_OPTIONS`
+are all still there, and that `.git` is still excluded.
+
 ### What the gate checks
 
 It reads `/proc/meminfo` over SSH and logs
