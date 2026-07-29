@@ -12,10 +12,22 @@ on:
     paths:
       - 'deploy/trc/**'
       - '.github/workflows/trc-*.yml'
+      # The ROOT Dockerfile, which no TRC asset would otherwise mention. It is
+      # here because deploy/trc/Dockerfile is a COPY of it plus the TRC deltas,
+      # and validate_compose.py pins its hash to catch the two drifting apart.
+      # A fork sync from open-webui touches ONLY this path, so without it the
+      # one event the pin exists to catch would not run the pin.
+      - 'Dockerfile'
   pull_request:
     paths:
       - 'deploy/trc/**'
       - '.github/workflows/trc-*.yml'
+      # The ROOT Dockerfile, which no TRC asset would otherwise mention. It is
+      # here because deploy/trc/Dockerfile is a COPY of it plus the TRC deltas,
+      # and validate_compose.py pins its hash to catch the two drifting apart.
+      # A fork sync from open-webui touches ONLY this path, so without it the
+      # one event the pin exists to catch would not run the pin.
+      - 'Dockerfile'
   workflow_dispatch:
 
 permissions:

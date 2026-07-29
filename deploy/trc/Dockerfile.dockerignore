@@ -1,0 +1,53 @@
+# Ignore rules for deploy/trc/Dockerfile ONLY.
+#
+# BuildKit prefers `<dockerfile-path>.dockerignore` over the context-root
+# `.dockerignore` when it exists, and does NOT merge the two -- so this file is
+# a full copy of the root one (upstream's rules, above the TRC block at the
+# bottom) rather than an overlay. Keeping it here is what lets the root
+# `.dockerignore` stay byte-identical to upstream.
+#
+# If an older BuildKit ignores this file and falls back to the root rules, the
+# cost is transfer time only, not correctness: the frontend stage enumerates
+# its COPY sources, so nothing extra in the context can invalidate a layer.
+
+.github
+.DS_Store
+docs
+kubernetes
+node_modules
+/.svelte-kit
+/package
+.env
+.env.*
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+__pycache__
+.idea
+venv
+_old
+uploads
+.ipynb_checkpoints
+**/*.db
+_test
+backend/data/*
+
+# TRC: keep the build context small and, more importantly, STABLE.
+#
+# .git is ~400 MB in this repo and its contents change on EVERY commit. Leaving
+# it in the context meant that context was tarred and streamed over SSH to the
+# deploy host twice per deploy (the frontend-only prebuild and the full build),
+# and that the frontend stage's COPY was invalidated by every commit whether or
+# not a single frontend file moved -- so `npm run build` never once hit the
+# layer cache the whole build-on-the-deploy-host arrangement exists to exploit.
+#
+# The trade is deliberate and already precedented: svelte.config.js falls back
+# from `git rev-parse HEAD` to the package.json version when git is absent, so
+# SvelteKit's version string no longer changes per commit (it drives the
+# poll-and-offer-reload mechanic, nothing else). The deploy workflow already
+# refuses to pass BUILD_HASH as a build-arg for exactly this reason -- it
+# records the commit as an image LABEL instead. Keeping .git in the context
+# quietly defeated that decision.
+.git
+.venv
+.ruff_cache
+/build
