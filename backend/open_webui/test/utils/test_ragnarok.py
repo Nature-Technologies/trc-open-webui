@@ -136,6 +136,48 @@ class TestSuccessfulNotification:
         assert args[0] == 'http://ragnarok.internal:8000/api/redaction/forget'
 
 
+class TestRequestTimeout:
+    """The per-call timeout has no safe fallback, so it is asserted explicitly.
+
+    Without the explicit `timeout=` kwarg each request inherits the shared
+    session's default, which is aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT)
+    -- and env.py leaves AIOHTTP_CLIENT_TIMEOUT as None when the variable is
+    unset, meaning UNLIMITED. A hung RAGnarok would then hang chat deletion
+    forever while every other test in this file stayed green, because they
+    assert the URL, body and headers and nothing about how long a call may
+    take. The batch budget bounds a folder's whole loop; this bounds the single
+    call that the other three deletion paths make.
+    """
+
+    @pytest.mark.asyncio
+    async def test_notify_chat_deleted_sends_an_explicit_total_timeout(self):
+        session = _fake_session(_FakePostContextManager(response=_FakeResponse(200)))
+
+        with patch.object(ragnarok, 'get_session', new=AsyncMock(return_value=session)):
+            await ragnarok.notify_chat_deleted('user-1', 'chat-1')
+
+        timeout = session.post.call_args.kwargs['timeout']
+        assert timeout.total == ragnarok._REQUEST_TIMEOUT_SECONDS
+        assert timeout.total is not None
+
+    @pytest.mark.asyncio
+    async def test_notify_user_chats_deleted_sends_an_explicit_total_timeout(self):
+        session = _fake_session(_FakePostContextManager(response=_FakeResponse(200)))
+
+        with patch.object(ragnarok, 'get_session', new=AsyncMock(return_value=session)):
+            await ragnarok.notify_user_chats_deleted('user-1')
+
+        timeout = session.post.call_args.kwargs['timeout']
+        assert timeout.total == ragnarok._REQUEST_TIMEOUT_SECONDS
+        assert timeout.total is not None
+
+    def test_the_configured_timeout_is_actually_bounded(self):
+        """Guards the constant itself: `_REQUEST_TIMEOUT_SECONDS = None` would
+        satisfy both assertions above by passing an unlimited ClientTimeout."""
+        assert isinstance(ragnarok._REQUEST_TIMEOUT_SECONDS, (int, float))
+        assert 0 < ragnarok._REQUEST_TIMEOUT_SECONDS <= 30
+
+
 class TestFailuresAreSwallowed:
     @pytest.mark.asyncio
     async def test_timeout_does_not_raise(self):
