@@ -251,7 +251,19 @@ class TestBatchBudget:
 
         with patch.object(ragnarok, 'get_session', new=AsyncMock(return_value=session)):
             started = time.monotonic()
-            await ragnarok.notify_chats_deleted('user-1', [f'chat-{i}' for i in range(300)])
+            # This test's own assertion on `elapsed` is what is supposed to
+            # catch a regression -- but it can only do that AFTER the await
+            # below returns. If _BATCH_BUDGET_SECONDS is ever removed, that
+            # await never returns (verified: it hangs indefinitely against
+            # this never-answering session), so the test would hang forever
+            # instead of failing, burning the whole CI job's timeout. This
+            # outer bound is independent of the behaviour under test -- 2s is
+            # well above the 0.1s budget configured above but far below a
+            # real per-call timeout -- so it only ever fires when the batch
+            # budget itself doesn't, turning "hangs forever" into "fails
+            # fast" for that regression.
+            async with asyncio.timeout(2):
+                await ragnarok.notify_chats_deleted('user-1', [f'chat-{i}' for i in range(300)])
             elapsed = time.monotonic() - started
 
         # Bounded by the ONE budget. Per-call bounding would be 300 * 5s here.
