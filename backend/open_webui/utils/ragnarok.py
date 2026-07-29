@@ -18,6 +18,7 @@ the service key) and swallowed.
 import asyncio
 import logging
 from collections.abc import Iterable
+from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 from open_webui.config import RAGNAROK_BASE_URL, RAGNAROK_SERVICE_KEY
@@ -45,6 +46,26 @@ def _is_configured() -> bool:
     return bool(RAGNAROK_BASE_URL and RAGNAROK_SERVICE_KEY)
 
 
+def _loggable_base_url() -> str:
+    """RAGNAROK_BASE_URL reduced to its origin, with any credentials stripped.
+
+    A URL may legally carry userinfo (scheme://user:password@host), and the
+    startup line below is INFO, so the raw configured value must never be
+    logged. Rebuilt from the parsed parts rather than pattern-stripped, so
+    anything that does not parse into a host is reported as unusable rather
+    than passed through.
+    """
+    try:
+        parts = urlsplit(RAGNAROK_BASE_URL)
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return '<unparseable>'
+    if not host:
+        return '<unparseable>'
+    netloc = f'{host}:{port}' if port else host
+    return urlunsplit((parts.scheme, netloc, parts.path, '', ''))
+
+
 def log_startup_status() -> None:
     """Log once, at startup, whether RAGnarok chat-deletion notifications are enabled.
 
@@ -53,7 +74,7 @@ def log_startup_status() -> None:
     warning on every chat deletion.
     """
     if _is_configured():
-        log.info('RAGnarok chat-deletion notifications enabled (base_url=%s)', RAGNAROK_BASE_URL)
+        log.info('RAGnarok chat-deletion notifications enabled (base_url=%s)', _loggable_base_url())
     else:
         log.info(
             'RAGNAROK_BASE_URL / RAGNAROK_SERVICE_KEY not set; chat-deletion notifications to RAGnarok are disabled.'

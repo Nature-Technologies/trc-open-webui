@@ -291,6 +291,39 @@ class TestStartupLogging:
 
         assert any('enabled' in record.message for record in caplog.records)
 
+    def test_credentials_in_the_base_url_are_not_logged(self, caplog, monkeypatch):
+        """The startup line is INFO, so it must survive a base URL that
+        carries userinfo -- the one shape of RAGNAROK_BASE_URL that turns a
+        harmless config echo into a credential leak."""
+        monkeypatch.setattr(ragnarok, 'RAGNAROK_BASE_URL', 'https://svc:sup3r-s3cret@ragnarok.internal:8443/base')
+
+        with caplog.at_level(logging.INFO, logger='open_webui.utils.ragnarok'):
+            ragnarok.log_startup_status()
+
+        logged = ' '.join(record.getMessage() for record in caplog.records)
+        assert 'sup3r-s3cret' not in logged
+        assert 'svc' not in logged
+        assert '@' not in logged
+        # Still useful: the operator can see which RAGnarok it points at.
+        assert 'https://ragnarok.internal:8443/base' in logged
+
+    def test_an_unparseable_base_url_is_not_echoed_verbatim(self, caplog, monkeypatch):
+        monkeypatch.setattr(ragnarok, 'RAGNAROK_BASE_URL', 'not a url with a s3cret in it')
+
+        with caplog.at_level(logging.INFO, logger='open_webui.utils.ragnarok'):
+            ragnarok.log_startup_status()
+
+        logged = ' '.join(record.getMessage() for record in caplog.records)
+        assert 's3cret' not in logged
+        assert '<unparseable>' in logged
+
+    def test_an_ordinary_base_url_is_logged_intact(self, caplog):
+        with caplog.at_level(logging.INFO, logger='open_webui.utils.ragnarok'):
+            ragnarok.log_startup_status()
+
+        logged = ' '.join(record.getMessage() for record in caplog.records)
+        assert 'http://ragnarok.internal:8000' in logged
+
     def test_logs_disabled_when_unconfigured(self, caplog, monkeypatch):
         monkeypatch.setattr(ragnarok, 'RAGNAROK_BASE_URL', '')
         monkeypatch.setattr(ragnarok, 'RAGNAROK_SERVICE_KEY', '')
