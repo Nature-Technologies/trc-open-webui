@@ -1908,10 +1908,23 @@ class ChatTable:
 
         Mirrors the (unfiltered) selection used by delete_chats_by_user_id_and_folder_id,
         so a caller can learn exactly which chats a deletion will remove beforehand.
+
+        Swallows and returns a safe default, exactly as its write-side siblings
+        do. This is the only DB call on the folder-deletion path that did not,
+        and it runs AFTER Folders.delete_folder_by_id_and_user_id has committed:
+        a statement timeout or connection blip here -- likeliest on precisely
+        the large folders this exists for -- would otherwise raise into the
+        router, become HTTP 400, and leave the folder rows deleted, the chats
+        orphaned on a nonexistent folder_id and revoke_all_access never
+        reached. An empty list costs only the best-effort RAGnarok purge, which
+        its reconciling sweep redoes regardless.
         """
-        async with get_async_db_context(db) as session:
-            result = await session.execute(select(Chat.id).filter_by(user_id=user_id, folder_id=folder_id))
-            return [row[0] for row in result.all()]
+        try:
+            async with get_async_db_context(db) as session:
+                result = await session.execute(select(Chat.id).filter_by(user_id=user_id, folder_id=folder_id))
+                return [row[0] for row in result.all()]
+        except Exception:
+            return []
 
     async def delete_chats_by_user_id_and_folder_id(
         self, user_id: str, folder_id: str, db: AsyncSession | None = None
