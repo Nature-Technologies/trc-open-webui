@@ -70,5 +70,20 @@ services:
       # value must be configured there as IDENTITY_JWT_SECRET. Nothing on
       # either side detects a mismatch.
       FORWARD_USER_INFO_HEADER_JWT_SECRET: "${OPENWEBUI_JWT_SECRET:?OPENWEBUI_JWT_SECRET must be set}"
+      # Chat deletion tells trc-backend to purge that chat's PII mappings.
+      # Reached over trc-shared by container name, exactly as the redaction
+      # filter's own calls are, so it never leaves the trust boundary. Both
+      # variables must be set or the hook is a silent no-op -- which is what
+      # every staging deploy was until this block existed.
+      RAGNAROK_BASE_URL: "${RAGNAROK_BASE_URL:-http://app:8000}"
+      # Secret. TWO-REPO SECRET: the SAME value trc-backend calls
+      # REDACTION_SERVICE_KEY -- the service-realm bearer gating
+      # /api/redaction/*, the forget endpoints included. A mismatch is silent
+      # by design (the hook swallows the 401 rather than failing a deletion)
+      # and surfaces only as mappings outliving their chat until trc-backend's
+      # reconciling sweep collects them. `:?` and not a default on purpose: an
+      # unset secret must fail the deploy loudly rather than quietly turn the
+      # purge back off.
+      RAGNAROK_SERVICE_KEY: "${RAGNAROK_SERVICE_KEY:?RAGNAROK_SERVICE_KEY must be set}"
     volumes:
       - trc-staging-open-webui-data:/app/backend/data
