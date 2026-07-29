@@ -10,7 +10,9 @@ under test are the ones the deletion call sites depend on:
     the coroutine returns normally and never raises.
 """
 
+import asyncio
 import logging
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
@@ -22,6 +24,21 @@ from open_webui.utils import ragnarok
 class _FakeResponse:
     def __init__(self, status: int = 200):
         self.status = status
+
+
+class _NeverAnsweringPostContextManager:
+    """A RAGnarok that accepts the connection and then never replies.
+
+    The per-call aiohttp ClientTimeout cannot save the caller here, because
+    nothing enforces it once aiohttp is faked out -- which is the point: the
+    batch budget has to be what bounds the loop.
+    """
+
+    async def __aenter__(self):
+        await asyncio.sleep(3600)
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
 
 
 class _FakePostContextManager:
@@ -156,6 +173,73 @@ class TestFailuresAreSwallowed:
                 await ragnarok.notify_chat_deleted('user1', 'chat1')
 
         assert any(record.levelno == logging.WARNING for record in caplog.records)
+
+
+class TestBatchBudget:
+    """notify_chats_deleted must cost a FIXED amount of time, not one
+    per-call timeout per chat. A folder subtree with hundreds of chats
+    against an unresponsive RAGnarok is the case that matters."""
+
+    @pytest.mark.asyncio
+    async def test_batch_stops_at_the_overall_budget_however_many_chats(self, monkeypatch):
+        monkeypatch.setattr(ragnarok, '_BATCH_BUDGET_SECONDS', 0.1)
+        session = _fake_session(_NeverAnsweringPostContextManager())
+
+        with patch.object(ragnarok, 'get_session', new=AsyncMock(return_value=session)):
+            started = time.monotonic()
+            await ragnarok.notify_chats_deleted('user-1', [f'chat-{i}' for i in range(300)])
+            elapsed = time.monotonic() - started
+
+        # Bounded by the ONE budget. Per-call bounding would be 300 * 5s here.
+        assert elapsed < 2
+        # And it really did give up rather than silently notifying nothing.
+        assert session.post.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_exhausting_the_budget_does_not_raise(self, monkeypatch):
+        monkeypatch.setattr(ragnarok, '_BATCH_BUDGET_SECONDS', 0.05)
+        session = _fake_session(_NeverAnsweringPostContextManager())
+
+        with patch.object(ragnarok, 'get_session', new=AsyncMock(return_value=session)):
+            # Must complete normally: a deletion is never failed by this hook.
+            await ragnarok.notify_chats_deleted('user-1', ['chat-a', 'chat-b'])
+
+    @pytest.mark.asyncio
+    async def test_notifies_every_chat_when_ragnarok_is_responsive(self):
+        session = _fake_session(_FakePostContextManager(response=_FakeResponse(200)))
+
+        with patch.object(ragnarok, 'get_session', new=AsyncMock(return_value=session)):
+            await ragnarok.notify_chats_deleted('user-42', ['chat-a', 'chat-b', 'chat-c'])
+
+        posted = [call.kwargs['json'] for call in session.post.call_args_list]
+        assert posted == [
+            {'conversation_key': 'user-42:chat-a'},
+            {'conversation_key': 'user-42:chat-b'},
+            {'conversation_key': 'user-42:chat-c'},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_empty_batch_makes_no_call(self):
+        with patch.object(ragnarok, 'get_session', new=AsyncMock()) as mock_get_session:
+            await ragnarok.notify_chats_deleted('user-1', [])
+
+        mock_get_session.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_external_cancellation_is_not_swallowed(self, monkeypatch):
+        """Distinct from the budget expiring: a caller cancelling this task --
+        graceful shutdown, client disconnect -- must still stop it. asyncio's
+        timeout context re-raises CancelledError rather than converting it, and
+        nothing here may catch it, or shutdown hangs on a best-effort assist."""
+        monkeypatch.setattr(ragnarok, '_BATCH_BUDGET_SECONDS', 3600)
+        session = _fake_session(_NeverAnsweringPostContextManager())
+
+        with patch.object(ragnarok, 'get_session', new=AsyncMock(return_value=session)):
+            task = asyncio.ensure_future(ragnarok.notify_chats_deleted('user-1', ['chat-a']))
+            await asyncio.sleep(0)  # let it reach the first await
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
 
 class TestStartupLogging:

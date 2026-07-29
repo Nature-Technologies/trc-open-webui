@@ -15,7 +15,9 @@ logged at warning level (ids and counts only, never PII, a chat title, or
 the service key) and swallowed.
 """
 
+import asyncio
 import logging
+from collections.abc import Iterable
 
 import aiohttp
 from open_webui.config import RAGNAROK_BASE_URL, RAGNAROK_SERVICE_KEY
@@ -27,6 +29,16 @@ log = logging.getLogger(__name__)
 # Kept short and well under a caller's own request timeout, so a slow or
 # unreachable RAGnarok never turns into a slow chat deletion.
 _REQUEST_TIMEOUT_SECONDS = 5
+
+# One budget for a WHOLE batch, deliberately not a per-call timeout. A folder
+# subtree can hold hundreds of chats, and _REQUEST_TIMEOUT_SECONDS multiplied
+# by that many sequential calls is measured in minutes -- long enough, against
+# a RAGnarok that accepts TCP but never answers, to pin a worker slot and its
+# checked-out DB session for the duration. Per call the "never meaningfully
+# delay a deletion" promise held; in aggregate it did not. Whatever the budget
+# cuts off is left to RAGnarok's reconciling sweep, which is the source of
+# truth regardless.
+_BATCH_BUDGET_SECONDS = 10
 
 
 def _is_configured() -> bool:
@@ -73,6 +85,38 @@ async def _notify(path: str, payload: dict) -> None:
 async def notify_chat_deleted(user_id: str, chat_id: str) -> None:
     """Tell RAGnarok that a single chat was deleted, so it can purge that chat's PII mappings."""
     await _notify('/api/redaction/forget', {'conversation_key': f'{user_id}:{chat_id}'})
+
+
+async def notify_chats_deleted(user_id: str, chat_ids: Iterable[str]) -> None:
+    """Tell RAGnarok that several of user_id's chats were deleted, under ONE budget.
+
+    Bounded in TOTAL by _BATCH_BUDGET_SECONDS however many chats there are, so
+    a large folder against an unresponsive RAGnarok costs the deletion request
+    a fixed few seconds rather than a multiple of the batch size.
+
+    Like everything else here this never raises for a RAGnarok-side problem.
+    It does let asyncio.CancelledError through -- a cancelled request must
+    still stop -- so callers must have finished anything that MUST happen
+    before they call this.
+    """
+    chat_ids = list(chat_ids)
+    if not chat_ids or not _is_configured():
+        return
+
+    notified = 0
+    try:
+        async with asyncio.timeout(_BATCH_BUDGET_SECONDS):
+            for chat_id in chat_ids:
+                await notify_chat_deleted(user_id, chat_id)
+                notified += 1
+    except TimeoutError:
+        log.warning(
+            'RAGnarok batch notification hit its %ss budget after %d of %d chats; '
+            "the remainder is left to RAGnarok's reconciling sweep",
+            _BATCH_BUDGET_SECONDS,
+            notified,
+            len(chat_ids),
+        )
 
 
 async def notify_user_chats_deleted(user_id: str) -> None:

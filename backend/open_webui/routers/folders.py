@@ -30,7 +30,7 @@ from open_webui.utils.access_control import (
 )
 from open_webui.utils.access_control.files import get_accessible_folder_files
 from open_webui.utils.auth import get_admin_user, get_verified_user
-from open_webui.utils.ragnarok import notify_chat_deleted
+from open_webui.utils.ragnarok import notify_chats_deleted
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -577,6 +577,13 @@ async def delete_folder_by_id(
             try:
                 folder_ids = await Folders.delete_folder_by_id_and_user_id(folder.id, folder_owner_id, db=db)
 
+                # Accumulated, not notified inline: RAGnarok is a best-effort
+                # assist and has a weaker claim on running than the grant
+                # revocation and event below. Notifying inside this loop put a
+                # remote call between deleted chats and their access grants,
+                # so a stalled or cancelled hook could leave the grants live.
+                deleted_chat_ids: list[str] = []
+
                 for folder_id in folder_ids:
                     if delete_contents:
                         # Collect chat ids before deleting them -- afterwards
@@ -584,8 +591,7 @@ async def delete_folder_by_id(
                         chat_ids = await Chats.get_chat_ids_by_user_id_and_folder_id(folder_owner_id, folder_id, db=db)
                         deleted = await Chats.delete_chats_by_user_id_and_folder_id(folder_owner_id, folder_id, db=db)
                         if deleted:
-                            for chat_id in chat_ids:
-                                await notify_chat_deleted(folder_owner_id, chat_id)
+                            deleted_chat_ids.extend(chat_ids)
                     else:
                         await Chats.move_chats_by_user_id_and_folder_id(folder_owner_id, folder_id, None, db=db)
 
@@ -599,6 +605,12 @@ async def delete_folder_by_id(
                     subject_id=id,
                     data={'folder_ids': folder_ids, 'delete_contents': delete_contents},
                 )
+                # Last, and under a single overall budget rather than a
+                # per-call one: every chat and folder row is already committed
+                # and every grant already revoked, so a slow, unreachable or
+                # cancelled RAGnarok can now only cost this request time it
+                # has bounded -- it can no longer skip anything.
+                await notify_chats_deleted(folder_owner_id, deleted_chat_ids)
                 return True
             except Exception as e:
                 log.exception(e)
