@@ -216,6 +216,28 @@ class TestFailuresAreSwallowed:
 
         assert any(record.levelno == logging.WARNING for record in caplog.records)
 
+    @pytest.mark.asyncio
+    async def test_a_credential_bearing_exception_message_is_not_logged_verbatim(self, monkeypatch, caplog):
+        """A malformed RAGNAROK_BASE_URL doesn't just fail to connect -- aiohttp's
+        own InvalidUrlClientError echoes the exact URL it failed to parse,
+        credentials included, as str(exception). Reproduced live against a real
+        aiohttp session with RAGNAROK_BASE_URL = 'http://svc:sup3r-s3cret@[bad':
+        the password appeared in cleartext at WARNING before this fix."""
+        monkeypatch.setattr(ragnarok, 'RAGNAROK_BASE_URL', 'http://svc:sup3r-s3cret@[bad')
+        exc = aiohttp.InvalidUrlClientError('http://svc:sup3r-s3cret@[bad/api/redaction/forget')
+        session = _fake_session(_FakePostContextManager(exception=exc))
+
+        with patch.object(ragnarok, 'get_session', new=AsyncMock(return_value=session)):
+            with caplog.at_level(logging.WARNING, logger='open_webui.utils.ragnarok'):
+                await ragnarok.notify_chat_deleted('user1', 'chat1')
+
+        logged = ' '.join(record.getMessage() for record in caplog.records)
+        assert 'sup3r-s3cret' not in logged
+        assert 'svc' not in logged
+        assert '@' not in logged
+        # The warning still fired -- this is about redaction, not suppression.
+        assert any(record.levelno == logging.WARNING for record in caplog.records)
+
 
 class TestBatchBudget:
     """notify_chats_deleted must cost a FIXED amount of time, not one
@@ -307,6 +329,32 @@ class TestStartupLogging:
         # Still useful: the operator can see which RAGnarok it points at.
         assert 'https://ragnarok.internal:8443/base' in logged
 
+    def test_credentials_in_the_base_url_are_flagged_as_inert_not_just_redacted(self, caplog, monkeypatch):
+        """Redacting the credentials from the log (above) is necessary but not
+        sufficient: aiohttp refuses to combine URL-embedded credentials with
+        the Authorization header this client always sends, so this shape of
+        RAGNAROK_BASE_URL doesn't just risk a log leak -- it makes EVERY
+        notification fail silently, forever. That must be visible at
+        startup, at WARNING, not folded into the routine 'enabled' INFO line."""
+        monkeypatch.setattr(ragnarok, 'RAGNAROK_BASE_URL', 'https://svc:sup3r-s3cret@ragnarok.internal:8443/base')
+
+        with caplog.at_level(logging.INFO, logger='open_webui.utils.ragnarok'):
+            ragnarok.log_startup_status()
+
+        assert any(record.levelno == logging.WARNING for record in caplog.records)
+        logged = ' '.join(record.getMessage() for record in caplog.records)
+        assert 'enabled' not in logged
+
+    def test_a_username_only_base_url_is_also_flagged(self, caplog, monkeypatch):
+        """Userinfo doesn't require a password -- scheme://user@host is legal
+        too, and triggers the same aiohttp conflict."""
+        monkeypatch.setattr(ragnarok, 'RAGNAROK_BASE_URL', 'https://svc@ragnarok.internal:8443/base')
+
+        with caplog.at_level(logging.WARNING, logger='open_webui.utils.ragnarok'):
+            ragnarok.log_startup_status()
+
+        assert any(record.levelno == logging.WARNING for record in caplog.records)
+
     def test_an_unparseable_base_url_is_not_echoed_verbatim(self, caplog, monkeypatch):
         monkeypatch.setattr(ragnarok, 'RAGNAROK_BASE_URL', 'not a url with a s3cret in it')
 
@@ -332,3 +380,26 @@ class TestStartupLogging:
             ragnarok.log_startup_status()
 
         assert any('disabled' in record.message for record in caplog.records)
+
+
+class TestRedactUrlCredentials:
+    """Unit tests for the helper _notify uses to sanitize exception text
+    before logging it -- see TestFailuresAreSwallowed for the integrated
+    version against a real aiohttp exception."""
+
+    def test_strips_user_and_password(self):
+        text = 'http://svc:sup3r-s3cret@ragnarok.internal:8443/api/redaction/forget'
+        redacted = ragnarok._redact_url_credentials(text)
+        assert 'sup3r-s3cret' not in redacted
+        assert 'svc' not in redacted
+        assert 'ragnarok.internal:8443/api/redaction/forget' in redacted
+
+    def test_strips_username_only(self):
+        text = 'http://svc@ragnarok.internal/path'
+        redacted = ragnarok._redact_url_credentials(text)
+        assert 'svc' not in redacted
+        assert 'ragnarok.internal/path' in redacted
+
+    def test_leaves_credential_free_text_untouched(self):
+        text = 'Cannot combine AUTHORIZATION header with AUTH argument or credentials encoded in URL'
+        assert ragnarok._redact_url_credentials(text) == text

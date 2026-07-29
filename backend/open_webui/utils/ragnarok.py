@@ -17,6 +17,7 @@ the service key) and swallowed.
 
 import asyncio
 import logging
+import re
 from collections.abc import Iterable
 from urllib.parse import urlsplit, urlunsplit
 
@@ -41,9 +42,27 @@ _REQUEST_TIMEOUT_SECONDS = 5
 # truth regardless.
 _BATCH_BUDGET_SECONDS = 10
 
+# Matches the userinfo portion of a URL ("//user:pass@" or "//user@"). Used to
+# scrub exception text before it is logged: aiohttp/yarl echo the exact URL
+# they failed to parse -- credentials included -- inside the exception's own
+# message (observed with aiohttp.InvalidUrlClientError), so `str(exception)`
+# is not safe to log verbatim the way a normal error string would be.
+_URL_CREDENTIALS_RE = re.compile(r'//[^/\s@]+@')
+
 
 def _is_configured() -> bool:
     return bool(RAGNAROK_BASE_URL and RAGNAROK_SERVICE_KEY)
+
+
+def _redact_url_credentials(text: str) -> str:
+    """Strip any "//user:pass@" userinfo found anywhere in text.
+
+    No "@" survives the substitution (matching _loggable_base_url's own
+    bar): a leftover "@" doesn't itself leak anything, but the rest of this
+    module treats "no '@' in the log line" as the check for "no embedded
+    credentials", so this keeps that check meaningful here too.
+    """
+    return _URL_CREDENTIALS_RE.sub('//<redacted>', text)
 
 
 def _loggable_base_url() -> str:
@@ -66,6 +85,23 @@ def _loggable_base_url() -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, '', ''))
 
 
+def _base_url_has_embedded_credentials() -> bool:
+    """True if RAGNAROK_BASE_URL carries userinfo (scheme://user[:pass]@host).
+
+    aiohttp raises rather than send a request that combines URL-embedded
+    credentials with an explicit Authorization header, and _notify always
+    sends one (the service key). So this shape doesn't degrade the hook --
+    it silently disables it outright, on every single call, forever. Checked
+    once at startup so that failure mode is visible in the log instead of
+    only as a recurring per-deletion warning nobody is watching for.
+    """
+    try:
+        parts = urlsplit(RAGNAROK_BASE_URL)
+    except ValueError:
+        return False
+    return bool(parts.username or parts.password)
+
+
 def log_startup_status() -> None:
     """Log once, at startup, whether RAGnarok chat-deletion notifications are enabled.
 
@@ -73,12 +109,26 @@ def log_startup_status() -> None:
     so an unconfigured deployment gets one line at boot rather than a
     warning on every chat deletion.
     """
-    if _is_configured():
-        log.info('RAGnarok chat-deletion notifications enabled (base_url=%s)', _loggable_base_url())
-    else:
+    if not _is_configured():
         log.info(
             'RAGNAROK_BASE_URL / RAGNAROK_SERVICE_KEY not set; chat-deletion notifications to RAGnarok are disabled.'
         )
+        return
+
+    if _base_url_has_embedded_credentials():
+        log.warning(
+            'RAGNAROK_BASE_URL (%s) has a username/password embedded in it; '
+            'aiohttp refuses to combine embedded URL credentials with the '
+            'Authorization header this client always sends, so EVERY '
+            'chat-deletion notification to RAGnarok will fail and this hook '
+            'is effectively disabled. Remove the embedded credentials from '
+            'RAGNAROK_BASE_URL -- RAGNAROK_SERVICE_KEY already authenticates '
+            'the request.',
+            _loggable_base_url(),
+        )
+        return
+
+    log.info('RAGnarok chat-deletion notifications enabled (base_url=%s)', _loggable_base_url())
 
 
 async def _notify(path: str, payload: dict) -> None:
@@ -100,7 +150,11 @@ async def _notify(path: str, payload: dict) -> None:
             if response.status >= 400:
                 log.warning('RAGnarok notification to %s returned HTTP %d', path, response.status)
     except Exception as e:
-        log.warning('RAGnarok notification to %s failed: %s', path, e)
+        # str(e) is not safe to log verbatim: aiohttp/yarl echo the exact URL
+        # they failed to parse -- credentials included -- inside an
+        # InvalidUrlClientError's own message. Redacted the same way the
+        # startup line redacts RAGNAROK_BASE_URL itself.
+        log.warning('RAGnarok notification to %s failed: %s', path, _redact_url_credentials(str(e)))
 
 
 async def notify_chat_deleted(user_id: str, chat_id: str) -> None:
