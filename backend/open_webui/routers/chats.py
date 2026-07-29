@@ -16,6 +16,7 @@ from open_webui.models.access_grants import AccessGrants
 from open_webui.models.config import Config
 from open_webui.models.chats import (
     AggregateChatStats,
+    Chat,
     ChatBody,
     ChatForm,
     ChatHistoryStats,
@@ -40,6 +41,7 @@ from open_webui.utils.context_compaction import compact_chat_branch
 from open_webui.utils.misc import get_message_list
 from open_webui.utils.models import get_all_models
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger(__name__)
@@ -906,8 +908,17 @@ async def get_all_chat_ids(user=Depends(get_admin_user), db: AsyncSession = Depe
     chats WITHOUT reading chat contents. `/all/db` returns full bodies and
     `/list` returns titles; both carry user content, and a cleanup job has no
     business receiving it.
+
+    The projection is the point, not a micro-optimisation. `Chats.get_chats()`
+    issues `select(Chat)` and validates every row, so it materialises every
+    chat's full JSON body — real PII included — into this process before the
+    comprehension throws it away. That avoids *returning* content while still
+    *reading* all of it, and on a mature deployment a scheduled sweep polling
+    this route would be an OOM risk. Selecting the id column keeps the promise
+    the docstring makes.
     """
-    return [chat.id for chat in await Chats.get_chats(db=db)]
+    result = await db.execute(select(Chat.id).order_by(Chat.updated_at.desc()))
+    return [row[0] for row in result.all()]
 
 
 ############################
