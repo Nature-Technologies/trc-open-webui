@@ -894,6 +894,23 @@ async def get_all_user_chats_in_db(user=Depends(get_admin_user), db: AsyncSessio
 
 
 ############################
+# GetAllChatIds
+############################
+
+
+@router.get('/all/ids', response_model=list[str])
+async def get_all_chat_ids(user=Depends(get_admin_user), db: AsyncSession = Depends(get_async_session)):
+    """Every live chat id, and nothing else.
+
+    Exists so an external retention job can reconcile against the set of live
+    chats WITHOUT reading chat contents. `/all/db` returns full bodies and
+    `/list` returns titles; both carry user content, and a cleanup job has no
+    business receiving it.
+    """
+    return [chat.id for chat in await Chats.get_chats(db=db)]
+
+
+############################
 # GetArchivedChats
 ############################
 
