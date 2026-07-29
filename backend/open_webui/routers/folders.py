@@ -581,12 +581,8 @@ async def delete_folder_by_id(
                     if delete_contents:
                         # Collect chat ids before deleting them -- afterwards
                         # they're gone and there's nothing left to list.
-                        chat_ids = await Chats.get_chat_ids_by_user_id_and_folder_id(
-                            folder_owner_id, folder_id, db=db
-                        )
-                        deleted = await Chats.delete_chats_by_user_id_and_folder_id(
-                            folder_owner_id, folder_id, db=db
-                        )
+                        chat_ids = await Chats.get_chat_ids_by_user_id_and_folder_id(folder_owner_id, folder_id, db=db)
+                        deleted = await Chats.delete_chats_by_user_id_and_folder_id(folder_owner_id, folder_id, db=db)
                         if deleted:
                             for chat_id in chat_ids:
                                 await notify_chat_deleted(folder_owner_id, chat_id)
