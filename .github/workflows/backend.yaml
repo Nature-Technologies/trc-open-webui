@@ -80,5 +80,19 @@ jobs:
       - name: Install backend dependencies
         run: pip install -r backend/requirements.txt "pytest-asyncio>=1.0.0"
 
+      # WEBUI_SECRET_KEY is required at IMPORT time, not at request time: env.py
+      # raises SystemExit when WEBUI_AUTH is on (the default) and the key is empty,
+      # so `from open_webui.models.chats import ...` aborts collection with an
+      # INTERNALERROR before a single test runs. A developer machine usually has
+      # the key exported already — which is exactly why this job passed locally
+      # and failed on its first CI run.
+      #
+      # The value is deliberately a fixed dummy. Nothing in these tests signs or
+      # verifies a token, so there is nothing for a real secret to protect, and a
+      # real one committed to a workflow file would be a leak. Do not swap it for a
+      # repository secret either: an unset secret renders as empty, which is the
+      # exact condition that breaks the import.
       - name: Run backend unit tests
+        env:
+          WEBUI_SECRET_KEY: ci-unit-tests-not-a-real-secret
         run: python -m pytest backend/open_webui/test -q
