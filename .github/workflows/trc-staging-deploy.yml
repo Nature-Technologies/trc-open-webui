@@ -460,6 +460,13 @@ jobs:
           OPENWEBUI_BIND: 0.0.0.0
           HERMES_API_KEY: ${{ secrets.HERMES_API_KEY }}
           OPENWEBUI_JWT_SECRET: ${{ secrets.OPENWEBUI_JWT_SECRET }}
+          # Container name on trc-shared, not a secret -- a literal here for
+          # the same reason OPENWEBUI_BIND is one.
+          RAGNAROK_BASE_URL: http://app:8000
+          # Same value as trc-backend's REDACTION_SERVICE_KEY. Compose uses the
+          # ${VAR:?} spelling for this one, so an unset or empty secret fails
+          # the deploy instead of silently disabling the PII purge on delete.
+          RAGNAROK_SERVICE_KEY: ${{ secrets.RAGNAROK_SERVICE_KEY }}
         run: |
           set -eu
           echo "deploying $OPENWEBUI_IMAGE"

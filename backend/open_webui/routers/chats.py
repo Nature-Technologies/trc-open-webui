@@ -40,6 +40,7 @@ from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.context_compaction import compact_chat_branch
 from open_webui.utils.misc import get_message_list
 from open_webui.utils.models import get_all_models
+from open_webui.utils.ragnarok import notify_chat_deleted, notify_user_chats_deleted
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -591,6 +592,7 @@ async def delete_all_user_chats(
             subject_id=user.id,
             subject_type='user',
         )
+        await notify_user_chats_deleted(user.id)
     return result
 
 
@@ -1470,6 +1472,9 @@ async def delete_chat_by_id(
                 subject_id=id,
                 data={'owner_id': chat.user_id},
             )
+            # Key on the chat's owner, not the deleting admin -- otherwise this
+            # purges nothing while leaving the real owner's PII mappings in place.
+            await notify_chat_deleted(chat.user_id, id)
         return result
     else:
         if not await has_permission(user.id, 'chat.delete', await Config.get('user.permissions')):
@@ -1495,6 +1500,7 @@ async def delete_chat_by_id(
                 subject_id=id,
                 data={'owner_id': user.id},
             )
+            await notify_chat_deleted(user.id, id)
         return result
 
 

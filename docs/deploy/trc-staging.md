@@ -563,6 +563,12 @@ here, and every one of them would arrive as the empty string.
 | `SSH_PORT`             | Optional, defaults to 22. Threaded through every consumer: the `ssh-keyscan` that seeds `known_hosts`, the job-level `DOCKER_HOST`, and the plain `ssh`/`scp` calls — a mismatch would scan one endpoint and then dial another                                                                    |
 | `HERMES_API_KEY`       | **Shared value.** Must be identical to `trc-hermes-agent`'s copy and to Paperclip's third copy in its instance `config.json`. Must be ≥16 characters — below that the gateway refuses to start the API server, so the symptom is connection-refused on :8642, not a 401. Checked before the build |
 | `OPENWEBUI_JWT_SECRET` | **Two-repo secret.** trc-backend calls the same value `IDENTITY_JWT_SECRET` and also needs `ENFORCE_VERIFIED_IDENTITY=true`. Verified by fingerprint comparison, warn-only                                                                                                                        |
+| `RAGNAROK_SERVICE_KEY` | **Two-repo secret.** trc-backend calls the identical value `REDACTION_SERVICE_KEY` — the service-realm bearer for `/api/redaction/*`, the same key the redaction filter already uses for `/redact` and `/unmask`. Compose references it as `${RAGNAROK_SERVICE_KEY:?}`, so an unset or empty secret **fails the deploy**: deliberate, because the alternative is a chat-deletion hook that silently purges nothing. A *wrong* value is silent by design — the hook is best-effort and swallows the 401 — so the symptom is PII mappings outliving their chat until trc-backend's reconciling sweep collects them. Not fingerprinted |
+
+`RAGNAROK_BASE_URL` is **not** a secret and is bound as a literal
+(`http://app:8000`) in the `Deploy` step's `env:`, the same way `OPENWEBUI_BIND`
+is: trc-backend is reached by container name over `trc-shared`, so the
+chat-deletion notification never leaves the trust boundary.
 
 Host keys are **scanned at deploy time**
 (`ssh-keyscan -T 10 -p "$SSH_PORT" -H "$HOST" > "$RUNNER_TEMP/known_hosts"`)

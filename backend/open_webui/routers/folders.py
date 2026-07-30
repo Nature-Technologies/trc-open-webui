@@ -30,6 +30,7 @@ from open_webui.utils.access_control import (
 )
 from open_webui.utils.access_control.files import get_accessible_folder_files
 from open_webui.utils.auth import get_admin_user, get_verified_user
+from open_webui.utils.ragnarok import notify_chats_deleted
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -570,6 +571,26 @@ async def delete_folder_by_id(
 
     folders = []
     folders.append(folder)
+
+    # Accumulated, not notified inline: RAGnarok is a best-effort assist and
+    # has a weaker claim on running than the grant revocation and event
+    # below. Notifying per folder_id put a remote call between deleted chats
+    # and their access grants, so a stalled or cancelled hook could leave
+    # the grants live.
+    #
+    # Declared here, above the `while`, and notified exactly once, after it
+    # -- both deliberately OUTSIDE the loop body rather than inside it. The
+    # loop only ever runs one iteration today: `break` below leaves it
+    # before `folders` is ever re-checked against the subfolders `finally`
+    # just queued into it, a pre-existing oddity deliberately left alone
+    # (the `finally` clearly intends to iterate subfolders; fixing that is
+    # out of scope here). If that is ever repaired so the loop truly
+    # iterates the subtree, an accumulator or a notify call still living
+    # inside it would silently go from "once per request" to "once per
+    # folder" -- bringing back the Critical this hook exists for, just at
+    # 10-second-per-folder granularity instead of one 10-second ceiling for
+    # the whole subtree. Do not move these back inside the loop.
+    deleted_chat_ids: list[str] = []
     while folders:
         folder = folders.pop()
         if folder:
@@ -578,7 +599,12 @@ async def delete_folder_by_id(
 
                 for folder_id in folder_ids:
                     if delete_contents:
-                        await Chats.delete_chats_by_user_id_and_folder_id(folder_owner_id, folder_id, db=db)
+                        # Collect chat ids before deleting them -- afterwards
+                        # they're gone and there's nothing left to list.
+                        chat_ids = await Chats.get_chat_ids_by_user_id_and_folder_id(folder_owner_id, folder_id, db=db)
+                        deleted = await Chats.delete_chats_by_user_id_and_folder_id(folder_owner_id, folder_id, db=db)
+                        if deleted:
+                            deleted_chat_ids.extend(chat_ids)
                     else:
                         await Chats.move_chats_by_user_id_and_folder_id(folder_owner_id, folder_id, None, db=db)
 
@@ -592,7 +618,7 @@ async def delete_folder_by_id(
                     subject_id=id,
                     data={'folder_ids': folder_ids, 'delete_contents': delete_contents},
                 )
-                return True
+                break
             except Exception as e:
                 log.exception(e)
                 log.error(f'Error deleting folder: {id}')
@@ -610,3 +636,10 @@ async def delete_folder_by_id(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
+
+    # Last, and under a single overall budget rather than a per-call one:
+    # every chat and folder row is already committed and every grant already
+    # revoked, so a slow, unreachable or cancelled RAGnarok can now only cost
+    # this request time it has bounded -- it can no longer skip anything.
+    await notify_chats_deleted(folder_owner_id, deleted_chat_ids)
+    return True

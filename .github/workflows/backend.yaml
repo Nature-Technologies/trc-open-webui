@@ -41,3 +41,58 @@ jobs:
 
       - name: Detect logic errors
         run: ruff check --select=F --ignore=F401,F403,F405,F541,F811,F841 --output-format=github .
+
+  # ── Backend unit tests -- fast lane, no external services ────────────────
+  # Regression guard for backend/open_webui/utils/ragnarok.py and the
+  # folders.py deletion hook: without this job, nothing in CI ran
+  # `backend/open_webui/test` at all, so a fix like the folder-deletion
+  # Critical (an unbounded loop that could skip access-grant revocation on
+  # cancellation) had only local test runs standing between it and a silent
+  # regression on the next merge conflict in that file.
+  test:
+    name: Backend Tests (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # backend/requirements.txt, not `pip install -e .`: installing the
+      # project itself invokes hatch_build.py's custom hook, which runs a
+      # full `npm install` + frontend build on every install -- dead weight
+      # for a Python-only test job. requirements.txt is the same pinned set
+      # the Docker image installs from, so this stays reproducible without
+      # that cost.
+      #
+      # This is still a full install of the backend's dependency graph, not
+      # a light one: even these narrow unit tests transitively import
+      # chromadb, torch, transformers and sentence-transformers by the time
+      # open_webui.routers.folders and open_webui.config are reachable, so
+      # there is no smaller subset that actually collects. Measured
+      # locally: ~2 minutes to install, ~15s to run once warm.
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt "pytest-asyncio>=1.0.0"
+
+      # WEBUI_SECRET_KEY is required at IMPORT time, not at request time: env.py
+      # raises SystemExit when WEBUI_AUTH is on (the default) and the key is empty,
+      # so `from open_webui.models.chats import ...` aborts collection with an
+      # INTERNALERROR before a single test runs. A developer machine usually has
+      # the key exported already — which is exactly why this job passed locally
+      # and failed on its first CI run.
+      #
+      # The value is deliberately a fixed dummy. Nothing in these tests signs or
+      # verifies a token, so there is nothing for a real secret to protect, and a
+      # real one committed to a workflow file would be a leak. Do not swap it for a
+      # repository secret either: an unset secret renders as empty, which is the
+      # exact condition that breaks the import.
+      - name: Run backend unit tests
+        env:
+          WEBUI_SECRET_KEY: ci-unit-tests-not-a-real-secret
+        run: python -m pytest backend/open_webui/test -q
