@@ -56,9 +56,9 @@ services:
       # bypassed, so removing this line restores the previous behaviour and
       # the previously saved values.
       ENABLE_PERSISTENT_CONFIG: "False"
-      ENABLE_TITLE_GENERATION: "false"
+      ENABLE_TITLE_GENERATION: "true"
       ENABLE_TAGS_GENERATION: "false"
-      ENABLE_FOLLOW_UP_GENERATION: "false"
+      ENABLE_FOLLOW_UP_GENERATION: "true"
       ENABLE_AUTOCOMPLETE_GENERATION: "false"
       ENABLE_SEARCH_QUERY_GENERATION: "false"
       ENABLE_RETRIEVAL_QUERY_GENERATION: "false"
