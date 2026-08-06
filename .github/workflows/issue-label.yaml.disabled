@@ -1,3 +1,20 @@
+# RETIRED FOR TRC -- arrived from upstream in the 0.10.2 -> current merge.
+#
+# This is upstream's community issue-triage automation, not something the TRC
+# fork wants running. It fires on every issue opened here, takes `issues:
+# write`, and adds a `bug` label keyed on headings from upstream's issue forms
+# ("Installation Method", "Open WebUI Version") -- forms this fork's issues do
+# not use. Where the `bug` label does not exist in this repo's label set the
+# addLabels call simply fails, hanging a red X on every issue opened.
+#
+# Retired by RENAME rather than deletion, the same way docker.yaml, release.yml
+# and release-pypi.yml were. The rename is what makes the retirement survive:
+# git follows it, so upstream's future edits merge into this inert file instead
+# of resurrecting an active one -- exactly what happened to docker.yaml.disabled
+# in this merge, which absorbed 12 lines of upstream changes without ever
+# becoming live again. A deletion would instead raise a delete/modify conflict
+# on every merge that touches this file, and one "take theirs" resolution would
+# silently switch it back on.
 name: Issue Labeler
 
 on:
