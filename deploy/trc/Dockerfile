@@ -104,7 +104,35 @@ COPY scripts ./scripts
 COPY svelte.config.js vite.config.ts tsconfig.json postcss.config.js tailwind.config.js .npmrc ./
 COPY CHANGELOG.md ./
 ENV APP_BUILD_HASH=${BUILD_HASH}
-RUN npm run build
+# TRC: sourcemaps OFF for the staging build. vite.config.ts sets
+# `build.sourcemap: true`, and rollup holds every module's sourcemap mappings in
+# the JS heap for the whole `rendering chunks` phase -- which is exactly where
+# the 0.11.0 build died: "Ineffective mark-compacts near heap limit" at ~3.8 GB
+# against the 4096 MB cap, with `average mu = 0.352` (V8 spending 65% of its
+# time in GC). The mappings scale with module count, and 0.10.2 -> 0.11.0 took
+# that to 6354 modules.
+#
+# Raising NODE_OPTIONS does NOT fix this, and makes it worse. The deploy host
+# had 3596 MB of PHYSICAL memory available -- already below the current cap --
+# because the running staging stack holds ~3.8 GB of its 7.4 GB. Any larger cap
+# just allocates into swap, and mark-compact walks the whole heap, so the build
+# thrashes rather than merely slowing: a 6-minute OOM becomes a 45-minute
+# timeout. The cap was never the constraint; physical memory is.
+#
+# `npm run build -- <flag>` rather than calling vite directly, deliberately:
+# running the npm script keeps `process.env.npm_package_version` set, which
+# vite.config.ts reads for APP_VERSION -- invoking vite straight would silently
+# build with APP_VERSION undefined. npm appends the args to the END of the
+# script, which is where `vite build` sits today. If upstream ever changes the
+# `build` script so it no longer ENDS in `vite build`, this flag lands on the
+# wrong command; check that on fork syncs.
+#
+# Fixed here rather than in vite.config.ts so the root config stays
+# byte-identical to upstream -- the same reason this Dockerfile is a copy.
+#
+# The cost is real: staging stack traces are minified. Re-enable by dropping the
+# flag if the host ever gets enough RAM to build with mappings in memory.
+RUN npm run build -- --sourcemap false
 
 ######## WebUI backend ########
 FROM python:3.11-slim-bookworm AS base
