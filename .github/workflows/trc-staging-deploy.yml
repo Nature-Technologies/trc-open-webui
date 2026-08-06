@@ -484,3 +484,44 @@ jobs:
           else
             echo "could not inspect open-webui for a record (non-fatal)"
           fi
+
+      # Keep ONLY the image this run deployed. TRC works forward from the tip
+      # rather than rolling back to an old image, and the rollback those tags
+      # promised was always thinner than it looked: each one predates a
+      # migration, so starting it runs old code against a schema alembic has
+      # already moved past. Recovery here is a re-dispatch at an older commit,
+      # which rebuilds from source and migrates consistently. That costs a
+      # build; it does not cost correctness.
+      #
+      # SCOPED BY `docker images "$IMAGE"`, which lists tags of THIS repository
+      # and nothing else. That is structural rather than a filter that could be
+      # written wrong, and it matters: this host is shared with trc-backend,
+      # trc-hermes-agent and paperclip, whose own `:git-<sha>` tags ARE their
+      # rollback targets. Nothing here can reach them. For the same reason
+      # `docker image prune -a` must never be run on that host -- it would take
+      # all three siblings' targets with it. `docker image prune -f` (dangling
+      # only) is the safe form if untagged layers ever pile up again.
+      #
+      # `:staging` is left alone: it is not a `git-` tag, and it points at the
+      # very image this run just deployed in any case.
+      #
+      # Runs only after a successful deploy (the default `if: success()`), so a
+      # failed run keeps the previous image around to carry on serving. Best
+      # effort throughout -- reclaiming disk must never fail a deploy that
+      # worked -- and `docker rmi` refuses an image a container is using, so the
+      # running one survives even if the tag arithmetic above were wrong.
+      - name: Prune this repo's older images
+        env:
+          KEEP: ${{ steps.tags.outputs.sha }}
+        run: |
+          set -eu
+          stale="$(docker images "$IMAGE" --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
+            | grep -- ':git-' | grep -vFx "$KEEP" || true)"
+          if [ -z "$stale" ]; then
+            echo "no older $IMAGE tags to remove"
+          else
+            echo "removing:"
+            printf '%s\n' "$stale"
+            printf '%s\n' "$stale" | xargs -r docker rmi || true
+          fi
+          docker system df || true
