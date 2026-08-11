@@ -56,9 +56,40 @@ services:
       # bypassed, so removing this line restores the previous behaviour and
       # the previously saved values.
       ENABLE_PERSISTENT_CONFIG: "False"
-      ENABLE_TITLE_GENERATION: "true"
+      # ALL SEVEN MUST STAY "false". These are the auto-generation tasks, and
+      # `routers/tasks.py` never calls `process_filter_functions` for any of
+      # them -- each one builds its prompt straight from the stored chat, which
+      # holds the RESTORED, UNMASKED answer. So they reach the task model with
+      # real client names and real portfolio figures on a path trc-backend
+      # cannot see, cannot filter, and cannot audit. It is the one hole the
+      # redaction filter cannot plug.
+      #
+      # Title and follow-up were "true" here until 2026-08-11, and that was not
+      # an oversight -- the other five were deliberately set to "false", so
+      # someone worked the list and judged these two harmless. They are not.
+      # Measured in the staging logs on that date: a title/follow-up prompt
+      # quoting a real client entity with its real portfolio value, and one
+      # follow-up prompt carrying the entire 48-name client roster in
+      # plaintext, because the preceding turn had been an enumeration.
+      #
+      # There is no safe subset. The prompt source is the same stored chat for
+      # every task in this list; "title" only sounds innocuous. Pointing
+      # TASK_MODEL at an in-boundary model would be the alternative fix, but
+      # Hermes is not one for this purpose -- it relays to an external
+      # reasoning model, so the text still leaves.
+      #
+      # Cost of "false", accepted deliberately: chats no longer auto-title
+      # (they fall back to the first message) and no follow-up chips are
+      # suggested. A UX regression is the correct trade against sending a
+      # client list to a third party.
+      #
+      # trc-backend warns at boot when any of these is on --
+      # app/core/owui_task_guard.py reads GET /api/v1/tasks/config. It is a
+      # smoke alarm, not a fix: this file is the fix, and with
+      # ENABLE_PERSISTENT_CONFIG false it is authoritative on every boot.
+      ENABLE_TITLE_GENERATION: "false"
       ENABLE_TAGS_GENERATION: "false"
-      ENABLE_FOLLOW_UP_GENERATION: "true"
+      ENABLE_FOLLOW_UP_GENERATION: "false"
       ENABLE_AUTOCOMPLETE_GENERATION: "false"
       ENABLE_SEARCH_QUERY_GENERATION: "false"
       ENABLE_RETRIEVAL_QUERY_GENERATION: "false"
