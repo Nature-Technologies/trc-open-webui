@@ -95,12 +95,40 @@ services:
       ENABLE_RETRIEVAL_QUERY_GENERATION: "false"
       ENABLE_IMAGE_PROMPT_GENERATION: "false"
       WEBUI_AUTH: "true"
+      # API keys (sk-...). Enable them so an admin can mint the key trc-backend's
+      # integrations authenticate with (OPENWEBUI_ADMIN_KEY): the retention
+      # sweep's `get_chats`, the customer/user sync, and the chat-deletion hooks
+      # all call Open WebUI's admin API with it, and every one 403s while this is
+      # off. The var is PLURAL and defaults to False; the singular ENABLE_API_KEY
+      # is not a setting and configuring it does nothing (a 403 on an otherwise
+      # correct request -- the trap the deploy runbook calls out). Open WebUI API
+      # keys are STATIC bearer tokens with no expiry, so once this is on the admin
+      # key is permanent -- there is no API-key TTL to configure.
+      ENABLE_API_KEYS: "true"
+      # Session (login) token lifetime -- NOT the API key's, which never expires.
+      # Default is 4w; "-1" means never. Set to never (2026-09-02) so operator
+      # sessions do not lapse. Open WebUI logs its own SECURITY WARNING for -1: a
+      # never-expiring session token cannot be timed out if it leaks, so this is
+      # a deliberate staging trade-off. Override with JWT_EXPIRES_IN in the env
+      # (e.g. "4w") to restore an expiry.
+      JWT_EXPIRES_IN: "${JWT_EXPIRES_IN:--1}"
       ENABLE_FORWARD_USER_INFO_HEADERS: "true"
       # Signs X-OpenWebUI-User-Jwt, which Hermes forwards to MCP servers as
       # X-Hermes-End-User-Jwt. trc-backend verifies the signature, so the same
       # value must be configured there as IDENTITY_JWT_SECRET. Nothing on
       # either side detects a mismatch.
       FORWARD_USER_INFO_HEADER_JWT_SECRET: "${OPENWEBUI_JWT_SECRET:?OPENWEBUI_JWT_SECRET must be set}"
+      # Lifetime of that forwarded JWT. It is minted ONCE per turn and reused for
+      # every MCP tool call within it, so its TTL must exceed the longest possible
+      # turn. Open WebUI's default is 300s (5 min) -- shorter than a real
+      # RAG-agent turn (several ~20-30s `query` calls plus retries), so the token
+      # expired mid-turn and trc-backend rejected the later calls with
+      # "no verified caller identity (fail-closed)", reason=expired (observed live
+      # 2026-09-02). 24h is generous and safe for an internal trust-boundary
+      # token; overridable, but never leave it at the 300s default for this
+      # workload. trc-backend's verifier correctly rejects an expired token, so
+      # the fix belongs here (issuance), not there.
+      FORWARD_USER_INFO_HEADER_JWT_EXPIRES_SECONDS: "${FORWARD_USER_INFO_HEADER_JWT_EXPIRES_SECONDS:-86400}"
       # Chat deletion tells trc-backend to purge that chat's PII mappings.
       # Reached over trc-shared by container name, exactly as the redaction
       # filter's own calls are, so it never leaves the trust boundary. Both
