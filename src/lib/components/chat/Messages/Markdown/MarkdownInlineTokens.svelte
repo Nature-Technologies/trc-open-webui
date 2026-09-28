@@ -22,6 +22,7 @@
 	import NoteLinkToken from './MarkdownInlineTokens/NoteLinkToken.svelte';
 	import SourceToken from './SourceToken.svelte';
 	import TrcCitation from './TrcCitation.svelte';
+	import TrcDownloadButton from './TrcDownloadButton.svelte';
 
 	export let id: string;
 	export let done = true;
@@ -81,7 +82,11 @@
 		<HtmlToken {id} {token} {onSourceClick} />
 	{:else if token.type === 'link'}
 		{@const noteId = getNoteIdFromHref(token.href)}
-		{#if noteId}
+		{#if /^\s*⬇/.test(token.text ?? '')}
+			<!-- TRC report download: the backend emits `[⬇ Download PDF](url)`; render it
+			     as a proper button (falls back to a plain link on any un-updated client). -->
+			<TrcDownloadButton href={token.href} label={token.text} />
+		{:else if noteId}
 			<NoteLinkToken {noteId} href={token.href} />
 		{:else if token.tokens}
 			<a
