@@ -3,9 +3,10 @@
 	import { writable } from 'svelte/store';
 	const i18n = getContext('i18n');
 
-	import { extractTrcSources } from '$lib/utils/trc-citations';
+	import { extractTrcSources, trcSourcesFromParts } from '$lib/utils/trc-citations';
 	import Markdown from './Markdown.svelte';
 	import StructuredOutputRenderer from './StructuredOutputRenderer.svelte';
+	import { buildOutputDisplayItems } from './structuredOutput';
 	import {
 		artifactCode,
 		chatId,
@@ -112,7 +113,14 @@
 	$: {
 		const trc = extractTrcSources(content ?? '');
 		trcContent = trc.content;
-		trcSourcesStore.set(trc.sources);
+		// Streamed answers leave `content` empty and carry the block in `output`, so the
+		// map is derived from both — otherwise the cards never render on that (primary)
+		// path. See trcSourcesFromParts.
+		const outputText = buildOutputDisplayItems(output ?? [])
+			.filter((it) => it?.type === 'message')
+			.map((it) => it?.text ?? '')
+			.join('\n');
+		trcSourcesStore.set(trcSourcesFromParts(content ?? '', outputText));
 	}
 
 	const getSourceIds = (sources) => {

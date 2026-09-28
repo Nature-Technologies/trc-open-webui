@@ -28,7 +28,7 @@
 			</button>
 		</LinkPreview.Trigger>
 		<LinkPreview.Portal>
-			<LinkPreview.Content class="z-[9999]" align="start" sideOffset={6}>
+			<LinkPreview.Content class="z-[9999]" align="start" strategy="fixed" sideOffset={6}>
 				<div
 					class="max-w-72 rounded-xl border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 shadow-lg p-3 text-xs"
 				>

@@ -27,3 +27,18 @@ export function extractTrcSources(content: string): {
 		return { content: stripped, sources: {} };
 	}
 }
+
+/**
+ * The marker->source map for a message, preferring the flat `content` and falling back
+ * to the `outputText` (the concatenated structured-output text). Streamed answers leave
+ * `content` empty and carry the block in `output`, so the fallback is what makes the
+ * hover cards appear on that — the primary — path.
+ */
+export function trcSourcesFromParts(
+	content: string,
+	outputText: string
+): Record<string, TrcSource> {
+	const fromContent = extractTrcSources(content ?? '').sources;
+	if (Object.keys(fromContent).length > 0) return fromContent;
+	return extractTrcSources(outputText ?? '').sources;
+}

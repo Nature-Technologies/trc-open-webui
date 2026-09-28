@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractTrcSources } from './trc-citations';
+import { extractTrcSources, trcSourcesFromParts } from './trc-citations';
 
 describe('extractTrcSources', () => {
 	it('pulls the map and strips the block', () => {
@@ -26,5 +26,24 @@ describe('extractTrcSources', () => {
 		const raw = '[S1]\n\n<!--trc:cite {"S1":{"name":"a --\\u003e b"}}-->';
 		const { sources } = extractTrcSources(raw);
 		expect(sources.S1.name).toBe('a --> b');
+	});
+});
+
+describe('trcSourcesFromParts', () => {
+	it('falls back to the output text when content has no block (streamed answers)', () => {
+		// Streamed answers leave `content` empty; the block rides in the output text.
+		const content = '';
+		const outputText = 'Total [S1].\n\n<!--trc:cite {"S1":{"name":"memo.pdf"}}-->';
+		expect(trcSourcesFromParts(content, outputText).S1).toEqual({ name: 'memo.pdf' });
+	});
+
+	it('prefers the content block and ignores the output when content has one', () => {
+		const content = '[S1]\n\n<!--trc:cite {"S1":{"name":"from-content.pdf"}}-->';
+		const outputText = '[S1]\n\n<!--trc:cite {"S1":{"name":"from-output.pdf"}}-->';
+		expect(trcSourcesFromParts(content, outputText).S1.name).toBe('from-content.pdf');
+	});
+
+	it('returns an empty map when neither part has a block', () => {
+		expect(trcSourcesFromParts('plain', 'also plain')).toEqual({});
 	});
 });
