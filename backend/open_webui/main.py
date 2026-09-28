@@ -2700,22 +2700,22 @@ async def get_manifest_json():
     else:
         return {
             'name': app.state.WEBUI_NAME,
-            'short_name': app.state.WEBUI_NAME,
-            'description': f'{app.state.WEBUI_NAME} is an open, extensible, user-friendly interface for AI that adapts to your workflow.',
+            'short_name': 'TRC',
+            'description': f'{app.state.WEBUI_NAME} — secure document assistant for authorized staff.',
             'start_url': '/',
             'display': 'standalone',
-            'background_color': '#343541',
+            'background_color': '#141011',
             'icons': [
                 {
                     'src': '/static/logo.png',
                     'type': 'image/png',
-                    'sizes': '500x500',
+                    'sizes': '512x512',
                     'purpose': 'any',
                 },
                 {
                     'src': '/static/logo.png',
                     'type': 'image/png',
-                    'sizes': '500x500',
+                    'sizes': '512x512',
                     'purpose': 'maskable',
                 },
             ],

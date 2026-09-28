@@ -3,18 +3,44 @@
 @config '../tailwind.config.js';
 
 @theme {
-	--color-gray-50: oklch(0.98 0 0);
-	--color-gray-100: oklch(0.94 0 0);
-	--color-gray-200: oklch(0.92 0 0);
-	--color-gray-300: oklch(0.85 0 0);
-	--color-gray-400: oklch(0.77 0 0);
-	--color-gray-500: oklch(0.69 0 0);
-	--color-gray-600: oklch(0.51 0 0);
-	--color-gray-700: oklch(0.42 0 0);
-	--color-gray-800: oklch(0.32 0 0);
-	--color-gray-850: oklch(0.27 0 0);
-	--color-gray-900: oklch(0.2 0 0);
-	--color-gray-950: oklch(0.16 0 0);
+	/* TRC neutrals — warm-tinted greys ported from the admin portal (paper #F8F5F3
+	   at the light end, warm near-black #141011 at the dark end). Low chroma so the
+	   warmth reads as paper, not colour. */
+	--color-gray-50: oklch(0.972 0.004 60);
+	--color-gray-100: oklch(0.94 0.005 55);
+	--color-gray-200: oklch(0.92 0.006 50);
+	--color-gray-300: oklch(0.85 0.006 45);
+	--color-gray-400: oklch(0.77 0.007 40);
+	--color-gray-500: oklch(0.69 0.007 38);
+	--color-gray-600: oklch(0.51 0.008 32);
+	--color-gray-700: oklch(0.42 0.008 28);
+	--color-gray-800: oklch(0.32 0.008 24);
+	--color-gray-850: oklch(0.27 0.008 22);
+	--color-gray-900: oklch(0.2 0.008 20);
+	--color-gray-950: oklch(0.16 0.007 18);
+
+	/* TRC crimson. Open WebUI has no primary-colour token — every accent is a
+	   `blue-*` utility — so the whole app is re-accented by remapping the blue ramp
+	   to the portal's crimson (#A02020 primary / #D4372F on dark, #7C1A1C active). */
+	--color-blue-50: #fbeceb;
+	--color-blue-100: #f7d7d5;
+	--color-blue-200: #eeb0ac;
+	--color-blue-300: #e48781;
+	--color-blue-400: #db5b53;
+	--color-blue-500: #d4372f;
+	--color-blue-600: #a02020;
+	--color-blue-700: #7c1a1c;
+	--color-blue-800: #611618;
+	--color-blue-900: #4a1214;
+	--color-blue-950: #2b0b0c;
+
+	/* Named brand aliases for anything that wants the intent, not the blue name. */
+	--color-primary: #a02020;
+	--color-primary-hover: #be2a2a;
+	--color-primary-active: #7c1a1c;
+	--color-primary-on-dark: #d4372f;
+
+	--font-sans: 'Outfit', ui-sans-serif, system-ui, sans-serif;
 }
 
 /*
@@ -39,9 +65,10 @@
 	html,
 	pre {
 		font-family:
-			-apple-system, BlinkMacSystemFont, 'Inter', 'Vazirmatn', ui-sans-serif, system-ui, 'Segoe UI',
-			Roboto, Ubuntu, Cantarell, 'Noto Sans', sans-serif, 'Helvetica Neue', Arial,
-			'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+			'Outfit', -apple-system, BlinkMacSystemFont, 'Inter', 'Vazirmatn', ui-sans-serif,
+			system-ui, 'Segoe UI', Roboto, Ubuntu, Cantarell, 'Noto Sans', sans-serif,
+			'Helvetica Neue', Arial, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol',
+			'Noto Color Emoji';
 	}
 
 	pre {
