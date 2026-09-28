@@ -8,6 +8,7 @@
 	import colonFenceExtension from '$lib/utils/marked/colon-fence-extension';
 	import footnoteExtension from '$lib/utils/marked/footnote-extension';
 	import citationExtension from '$lib/utils/marked/citation-extension';
+	import trcCitationExtension from '$lib/utils/marked/trc-citation-extension';
 
 	const options = {
 		throwOnError: false
@@ -16,6 +17,7 @@
 	marked.use(markedKatexExtension(options));
 	marked.use(markedExtension(options));
 	marked.use(citationExtension(options));
+	marked.use(trcCitationExtension());
 	marked.use(footnoteExtension(options));
 	marked.use(colonFenceExtension(options));
 	marked.use(disableSingleTilde);

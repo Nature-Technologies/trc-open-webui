@@ -1,9 +1,12 @@
 <script>
-	import { onDestroy, onMount, tick, getContext } from 'svelte';
+	import { onDestroy, onMount, tick, getContext, setContext } from 'svelte';
+	import { writable } from 'svelte/store';
 	const i18n = getContext('i18n');
 
+	import { extractTrcSources, trcSourcesFromParts } from '$lib/utils/trc-citations';
 	import Markdown from './Markdown.svelte';
 	import StructuredOutputRenderer from './StructuredOutputRenderer.svelte';
+	import { buildOutputDisplayItems } from './structuredOutput';
 	import {
 		artifactCode,
 		chatId,
@@ -99,6 +102,26 @@
 
 	let sourceIds = [];
 	$: getSourceIds(sources);
+
+	// TRC inline citations: pull the invisible `<!--trc:cite {…}-->` block out of the
+	// message content into a marker->source map (shared with the inline renderer via
+	// context), and render the block-stripped content. See $lib/utils/trc-citations.
+	const trcSourcesStore = writable({});
+	setContext('trcSources', trcSourcesStore);
+
+	let trcContent = '';
+	$: {
+		const trc = extractTrcSources(content ?? '');
+		trcContent = trc.content;
+		// Streamed answers leave `content` empty and carry the block in `output`, so the
+		// map is derived from both — otherwise the cards never render on that (primary)
+		// path. See trcSourcesFromParts.
+		const outputText = buildOutputDisplayItems(output ?? [])
+			.filter((it) => it?.type === 'message')
+			.map((it) => it?.text ?? '')
+			.join('\n');
+		trcSourcesStore.set(trcSourcesFromParts(content ?? '', outputText));
+	}
 
 	const getSourceIds = (sources) => {
 		const result = [];
@@ -303,7 +326,7 @@
 		<div class="markdown-prose">
 			<Markdown
 				{id}
-				content={formatMessageContent(content)}
+				content={formatMessageContent(trcContent)}
 				{model}
 				{save}
 				{preview}

@@ -618,6 +618,43 @@ From the retired build-on-runner, publish-to-GHCR scheme:
   `$`/backtick/`#` charset guard is gone with the dotenv parsing that needed it.
 - **No cleanup step**, which leaks one `ssh-agent` per dispatch on the runner.
 
+## Admin settings this deploy does NOT own (2026-09-19)
+
+Three things live in Open WebUI's admin UI rather than in this repo, so a deploy
+cannot set them and cannot notice when someone changes them. They are written
+down here because each one silently degrades the PII boundary or the agent.
+
+- **The model system prompt must be EMPTY** for the Hermes-backed model (O2).
+  It used to carry the TRC rules; they now live in
+  `trc-hermes-agent/deploy/trc/SOUL.md`, sourced from
+  `trc-backend/integrations/openwebui/SYSTEM_PROMPT.md` and checked for drift by
+  the fleet health check. The reason for the move: Open WebUI's model system
+  prompt reaches Hermes as the *ephemeral* tier and is concatenated LAST — after
+  ~15 K characters of Hermes persona — so the TRC rules were the last thing the
+  model read instead of the first. Leaving a copy here as well would put two
+  copies of a security control in the prompt, which is worse than the original
+  problem. Check Admin → Settings → Models, Admin → Settings → Interface, and the
+  test accounts' own settings.
+- **Only the `trc-assistant` model is visible to end users** (O4). Hermes exposes
+  it as a `model_routes` alias so the served model is a config value rather than
+  whatever the client sends; a second visible id lets a user pick a model nobody
+  recorded retention terms for. Set it as the default for new chats.
+- **The redaction filter is a deployed COPY** of
+  `trc-backend/integrations/openwebui/filter.py` (O3). Nothing here updates it.
+  After a backend change to that file — most recently B7, which strips URLs,
+  markdown-link targets and the `**Sources**` footer from assistant history
+  before redaction, because a presigned storage URL was found verbatim in an
+  OpenRouter request export — paste the new version into Admin → Functions and
+  confirm the valves (`redaction_base_url`, service key) survived. Functions
+  hot-reload; nothing needs restarting.
+
+And one standing reminder (O5): all seven `ENABLE_*_GENERATION` flags are
+`"false"` in `deploy/trc/docker-compose-staging-trc.yml`, and admin-UI edits must
+not turn them back on. Those tasks bypass the filter entirely and prompt the
+model straight from the stored chat, which holds un-masked answers — the one hole
+a filter cannot plug. The backend's boot guard warns if any flips; treat that
+warning as a blocker, not a notice.
+
 ## Checks
 
 `deploy/trc/validate_compose.py` asserts the invariants that make three
