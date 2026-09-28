@@ -47,3 +47,20 @@ describe('trcSourcesFromParts', () => {
 		expect(trcSourcesFromParts('plain', 'also plain')).toEqual({});
 	});
 });
+
+describe('block never renders as visible text (the staging regression)', () => {
+	it('strips a realistic multi-source block off a streamed answer, leaving only prose', () => {
+		const answer = 'Here is the fuller record for the person. Want me to open any of them?';
+		const raw =
+			answer +
+			'\n\n<!--trc:cite {"S1":{"name":"Steven Baker","source":"affinity",' +
+			'"url":"https://thornapplecapital.affinity.co/persons/129422925"},' +
+			'"S30":{"name":"Steven Baker","source":"affinity",' +
+			'"url":"https://thornapplecapital.affinity.co/persons/129496496"}}-->';
+		const { content, sources } = extractTrcSources(raw);
+		expect(content).toBe(answer); // no `<!--trc:cite` residue on screen
+		expect(content).not.toContain('trc:cite');
+		expect(content).not.toContain('thornapplecapital');
+		expect(Object.keys(sources)).toEqual(['S1', 'S30']); // still available for the cards
+	});
+});
