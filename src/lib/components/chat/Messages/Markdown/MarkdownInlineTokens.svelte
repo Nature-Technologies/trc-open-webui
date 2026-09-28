@@ -4,6 +4,7 @@
 
 	import type { Token } from 'marked';
 	import { getContext } from 'svelte';
+	import { writable, type Writable } from 'svelte/store';
 	import { goto } from '$app/navigation';
 
 	const i18n = getContext('i18n');
@@ -20,12 +21,18 @@
 	import MentionToken from './MarkdownInlineTokens/MentionToken.svelte';
 	import NoteLinkToken from './MarkdownInlineTokens/NoteLinkToken.svelte';
 	import SourceToken from './SourceToken.svelte';
+	import TrcCitation from './TrcCitation.svelte';
 
 	export let id: string;
 	export let done = true;
 	export let tokens: Token[];
 	export let sourceIds = [];
 	export let onSourceClick: Function = () => {};
+
+	// TRC inline citations: the marker->source map is provided by ContentRenderer via
+	// context; a Markdown rendered outside that (no provider) falls back to an empty map,
+	// and each marker then renders as its bare `[Sn]` text — safe, never an error.
+	const trcSources: Writable<Record<string, any>> = getContext('trcSources') ?? writable({});
 
 	/**
 	 * Check if a URL is a same-origin note link and return the note ID if so.
@@ -136,6 +143,8 @@
 		{:else}
 			<TextToken {token} {done} />
 		{/if}
+	{:else if token.type === 'trcCitation'}
+		<TrcCitation marker={(token as any).marker} source={$trcSources?.[(token as any).marker]} />
 	{:else if token.type === 'text'}
 		<TextToken {token} {done} />
 	{/if}

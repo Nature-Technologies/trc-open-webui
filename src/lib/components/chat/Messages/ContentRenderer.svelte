@@ -1,7 +1,9 @@
 <script>
-	import { onDestroy, onMount, tick, getContext } from 'svelte';
+	import { onDestroy, onMount, tick, getContext, setContext } from 'svelte';
+	import { writable } from 'svelte/store';
 	const i18n = getContext('i18n');
 
+	import { extractTrcSources } from '$lib/utils/trc-citations';
 	import Markdown from './Markdown.svelte';
 	import StructuredOutputRenderer from './StructuredOutputRenderer.svelte';
 	import {
@@ -99,6 +101,19 @@
 
 	let sourceIds = [];
 	$: getSourceIds(sources);
+
+	// TRC inline citations: pull the invisible `<!--trc:cite {…}-->` block out of the
+	// message content into a marker->source map (shared with the inline renderer via
+	// context), and render the block-stripped content. See $lib/utils/trc-citations.
+	const trcSourcesStore = writable({});
+	setContext('trcSources', trcSourcesStore);
+
+	let trcContent = '';
+	$: {
+		const trc = extractTrcSources(content ?? '');
+		trcContent = trc.content;
+		trcSourcesStore.set(trc.sources);
+	}
 
 	const getSourceIds = (sources) => {
 		const result = [];
@@ -303,7 +318,7 @@
 		<div class="markdown-prose">
 			<Markdown
 				{id}
-				content={formatMessageContent(content)}
+				content={formatMessageContent(trcContent)}
 				{model}
 				{save}
 				{preview}
