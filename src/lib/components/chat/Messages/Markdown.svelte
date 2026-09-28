@@ -33,6 +33,7 @@
 <script>
 	import { onDestroy } from 'svelte';
 	import { replaceTokens, processResponseContent } from '$lib/utils';
+	import { extractTrcSources } from '$lib/utils/trc-citations';
 	import { user } from '$lib/stores';
 
 	import MarkdownTokens from './Markdown/MarkdownTokens.svelte';
@@ -69,7 +70,12 @@
 		if (content === lastContent) return;
 		lastContent = content;
 
-		const processed = replaceTokens(processResponseContent(content), model?.name, $user?.name);
+		// Strip the TRC citation data block (`<!--trc:cite {…}-->`) here, at the one point
+		// every render path (content, streamed output, details) funnels through — Open WebUI
+		// renders an HTML comment as visible text, so it must never reach the lexer. The map
+		// it carried is provided separately via context by ContentRenderer.
+		const stripped = extractTrcSources(content ?? '').content;
+		const processed = replaceTokens(processResponseContent(stripped), model?.name, $user?.name);
 		if (processed === lastParsedContent) return;
 		lastParsedContent = processed;
 
