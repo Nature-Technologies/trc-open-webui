@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext } from 'svelte';
-	import { embed, showControls, showEmbeds } from '$lib/stores';
+	import { embed, showControls, showEmbeds, showTrcDoc, trcDoc } from '$lib/stores';
 
 	import CitationModal from './Citations/CitationModal.svelte';
 
@@ -49,6 +49,8 @@
 						window.open(embedUrl, '_blank');
 						return;
 					} else {
+						showTrcDoc.set(false);
+						trcDoc.set(null);
 						showControls.set(true);
 						showEmbeds.set(true);
 						embed.set({

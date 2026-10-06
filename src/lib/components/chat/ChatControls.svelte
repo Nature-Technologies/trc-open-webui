@@ -17,6 +17,8 @@
 		showCallOverlay,
 		showArtifacts,
 		showEmbeds,
+		showTrcDoc,
+		trcDoc,
 		settings,
 		showFileNavPath,
 		selectedTerminalId,
@@ -31,6 +33,7 @@
 	import Drawer from '../common/Drawer.svelte';
 	import Artifacts from './Artifacts.svelte';
 	import Embeds from './ChatControls/Embeds.svelte';
+	import TrcDocPanel from './ChatControls/TrcDocPanel.svelte';
 	import FileNav from './FileNav.svelte';
 	import PyodideFileNav from './PyodideFileNav.svelte';
 	import Overview from './Overview.svelte';
@@ -266,13 +269,21 @@
 		}
 		showArtifacts.set(false);
 		showEmbeds.set(false);
+		showTrcDoc.set(false);
+		trcDoc.set(null);
 		if ($showCallOverlay) showCallOverlay.set(false);
 	};
 
 	$: if (paneReady && !chatId) closeHandler();
 
+	// A TRC document belongs to the chat that produced it; never show it in another chat.
+	$: if (chatId && $trcDoc && $trcDoc.chatId !== chatId) {
+		showTrcDoc.set(false);
+		trcDoc.set(null);
+	}
+
 	// Helper: is a "special" full-screen panel active?
-	$: specialPanel = $showCallOverlay || $showArtifacts || $showEmbeds;
+	$: specialPanel = $showCallOverlay || $showArtifacts || $showEmbeds || $showTrcDoc;
 </script>
 
 {#if !largeScreen}
@@ -297,6 +308,8 @@
 							on:close={() => showControls.set(false)}
 						/>
 					</div>
+				{:else if $showTrcDoc}
+					<TrcDocPanel />
 				{:else if $showEmbeds}
 					<Embeds />
 				{:else if $showArtifacts}
@@ -441,6 +454,8 @@
 								on:close={() => showControls.set(false)}
 							/>
 						</div>
+					{:else if $showTrcDoc}
+						<TrcDocPanel />
 					{:else if $showEmbeds}
 						<Embeds overlay={dragged} />
 					{:else if $showArtifacts}
