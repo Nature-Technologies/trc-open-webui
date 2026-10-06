@@ -32,6 +32,17 @@ _ID_SHAPES = {
     'report': re.compile(r'^[A-Za-z0-9_-]{32}$'),
 }
 _MAX_BYTES = 20 * 1024 * 1024
+_CHUNK_BYTES = 64 * 1024
+_KIND_FORMATS = {
+    'list': {'meta', 'csv', 'pdf'},
+    'report': {'meta', 'md', 'pdf'},
+}
+_MEDIA_TYPES = {
+    'csv': 'text/csv; charset=utf-8',
+    'md': 'text/markdown; charset=utf-8',
+    'pdf': 'application/pdf',
+    'meta': 'application/json',
+}
 _TIMEOUT_SECONDS = 30
 _DOWNLOAD_NAMES = {
     'csv': 'trc-list.csv',
@@ -39,6 +50,21 @@ _DOWNLOAD_NAMES = {
     'md': 'trc-document.md',
     'meta': 'trc-document.json',
 }
+
+
+async def _read_capped(resp) -> bytes:
+    """Read the whole body, refusing (502) as soon as it exceeds _MAX_BYTES."""
+    too_large = HTTPException(status_code=502, detail='Document too large to display')
+    if resp.content_length is not None and resp.content_length > _MAX_BYTES:
+        raise too_large
+    chunks = []
+    total = 0
+    async for chunk in resp.content.iter_chunked(_CHUNK_BYTES):
+        total += len(chunk)
+        if total > _MAX_BYTES:
+            raise too_large
+        chunks.append(chunk)
+    return b''.join(chunks)
 
 
 @router.get('/docs/{kind}/{doc_id}')
@@ -52,7 +78,9 @@ async def get_trc_doc(
 ):
     if not (RAGNAROK_BASE_URL and RAGNAROK_SERVICE_KEY):
         raise HTTPException(status_code=503, detail='Document viewer is not configured')
-    if not _ID_SHAPES[kind].match(doc_id):
+    if not _ID_SHAPES[kind].fullmatch(doc_id):
+        raise HTTPException(status_code=404, detail='Document not found')
+    if format not in _KIND_FORMATS[kind]:
         raise HTTPException(status_code=404, detail='Document not found')
     chat = await Chats.get_chat_by_id_and_user_id(chat_id, user.id)
     if chat is None:
@@ -75,24 +103,22 @@ async def get_trc_doc(
             if resp.status != 200:
                 log.warning('trc_docs: backend status %s kind=%s fmt=%s', resp.status, kind, format)
                 raise HTTPException(status_code=503, detail='Document service unavailable')
-            body = await resp.content.read(_MAX_BYTES + 1)
-            media_type = resp.headers.get('Content-Type', 'application/octet-stream')
+            body = await _read_capped(resp)
     except HTTPException:
         raise
     except (TimeoutError, aiohttp.ClientError) as exc:
         log.warning('trc_docs: backend unreachable (%s) kind=%s fmt=%s', type(exc).__name__, kind, format)
         raise HTTPException(status_code=503, detail='Document service unavailable')
-    if len(body) > _MAX_BYTES:
-        raise HTTPException(status_code=502, detail='Document too large to display')
 
     log.info('trc_docs: served user=%s chat=%s kind=%s fmt=%s bytes=%d', user.id, chat_id, kind, format, len(body))
     disposition = f'attachment; filename="{_DOWNLOAD_NAMES[format]}"' if download else 'inline'
     return Response(
         content=body,
-        media_type=media_type,
+        media_type=_MEDIA_TYPES[format],
         headers={
             'Cache-Control': 'no-store',
             'X-Content-Type-Options': 'nosniff',
             'Content-Disposition': disposition,
+            'Content-Security-Policy': 'sandbox',
         },
     )

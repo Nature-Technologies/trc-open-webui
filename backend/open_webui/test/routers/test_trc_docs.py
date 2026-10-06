@@ -23,18 +23,22 @@ USER = SimpleNamespace(id='u1', role='user')
 
 
 class FakeContent:
-    def __init__(self, body: bytes):
+    def __init__(self, body: bytes, chunk: int = 3):
         self._body = body
+        self._chunk = chunk
 
-    async def read(self, n: int = -1) -> bytes:
-        return self._body if n < 0 else self._body[:n]
+    async def iter_chunked(self, n: int):
+        # Deliberately tiny chunks, whatever n is: a real stream hands over what is buffered.
+        for i in range(0, len(self._body), self._chunk):
+            yield self._body[i : i + self._chunk]
 
 
 class FakeResponse:
-    def __init__(self, status=200, body=SECRET_BODY, content_type='text/csv'):
+    def __init__(self, status=200, body=SECRET_BODY, content_type='text/csv', content_length=None, chunk=3):
         self.status = status
+        self.content_length = content_length
         self.headers = {'Content-Type': content_type}
-        self.content = FakeContent(body)
+        self.content = FakeContent(body, chunk)
 
 
 class FakeSession:
@@ -79,7 +83,9 @@ class TestSuccess:
         resp = await _call(session)
 
         assert resp.body == SECRET_BODY
-        assert resp.media_type == 'text/csv'
+        assert resp.media_type == 'text/csv; charset=utf-8'
+        assert resp.headers['content-type'] == 'text/csv; charset=utf-8'
+        assert resp.headers['content-security-policy'] == 'sandbox'
         assert resp.headers['cache-control'] == 'no-store'
         assert resp.headers['x-content-type-options'] == 'nosniff'
         assert resp.headers['content-disposition'] == 'inline'
@@ -118,6 +124,8 @@ class TestRefusalsBeforeAnyPost:
             ('list', REPORT_ID),
             ('report', LIST_ID),
             ('list', 'lst_short'),
+            ('list', LIST_ID + '\n'),
+            ('report', REPORT_ID + '\n'),
             ('list', '../etc/passwd'),
             ('report', 'B' * 31),
         ],
@@ -158,17 +166,60 @@ class TestBackendFailures:
         assert exc.value.status_code == 503
 
     @pytest.mark.asyncio
-    async def test_oversize_body_is_502(self):
+    async def test_multi_chunk_body_is_served_whole(self):
+        body = bytes(range(256)) * 40
+        resp = await _call(FakeSession(FakeResponse(body=body)))
+        assert resp.body == body
+
+    @pytest.mark.asyncio
+    async def test_oversize_streamed_body_is_502(self):
         big = b'x' * (trc_docs._MAX_BYTES + 1)
         with pytest.raises(HTTPException) as exc:
-            await _call(FakeSession(FakeResponse(body=big)))
+            await _call(FakeSession(FakeResponse(body=big, chunk=1024 * 1024)))
+        assert exc.value.status_code == 502
+
+    @pytest.mark.asyncio
+    async def test_oversize_declared_length_is_502_without_reading(self):
+        resp = FakeResponse(content_length=trc_docs._MAX_BYTES + 1)
+        resp.content.iter_chunked = None  # would raise if the body were touched
+        with pytest.raises(HTTPException) as exc:
+            await _call(FakeSession(resp))
         assert exc.value.status_code == 502
 
     @pytest.mark.asyncio
     async def test_body_at_cap_is_served(self):
         body = b'x' * trc_docs._MAX_BYTES
-        resp = await _call(FakeSession(FakeResponse(body=body)))
+        resp = await _call(FakeSession(FakeResponse(body=body, chunk=1024 * 1024)))
         assert len(resp.body) == trc_docs._MAX_BYTES
+
+
+class TestContentType:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        'kind,doc_id,fmt,expected',
+        [
+            ('list', LIST_ID, 'csv', 'text/csv; charset=utf-8'),
+            ('report', REPORT_ID, 'md', 'text/markdown; charset=utf-8'),
+            ('list', LIST_ID, 'pdf', 'application/pdf'),
+            ('report', REPORT_ID, 'meta', 'application/json'),
+        ],
+    )
+    async def test_backend_content_type_is_ignored(self, kind, doc_id, fmt, expected):
+        session = FakeSession(FakeResponse(content_type='text/html'))
+        resp = await _call(session, kind=kind, doc_id=doc_id, fmt=fmt)
+        assert resp.headers['content-type'] == expected
+        assert resp.headers['content-security-policy'] == 'sandbox'
+
+
+class TestKindFormatMismatch:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('kind,doc_id,fmt', [('list', LIST_ID, 'md'), ('report', REPORT_ID, 'csv')])
+    async def test_mismatch_is_404_without_backend_call(self, kind, doc_id, fmt):
+        session = FakeSession(FakeResponse())
+        with pytest.raises(HTTPException) as exc:
+            await _call(session, kind=kind, doc_id=doc_id, fmt=fmt)
+        assert exc.value.status_code == 404
+        assert session.calls == []
 
 
 class TestLogHygiene:
