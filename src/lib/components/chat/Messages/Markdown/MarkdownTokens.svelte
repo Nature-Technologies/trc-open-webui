@@ -25,6 +25,7 @@
 	import HtmlToken from './HTMLToken.svelte';
 	import Clipboard from '$lib/components/icons/Clipboard.svelte';
 	import ColonFenceBlock from './ColonFenceBlock.svelte';
+	import TrcDocCard from './TrcDocCard.svelte';
 
 	export let id: string;
 	export let tokens: Token[];
@@ -160,6 +161,10 @@
 				{onSourceClick}
 			/>
 		</svelte:element>
+	{:else if token.type === 'code' && (token?.lang ?? '') === 'trc-doc' && token.raw.startsWith('```trc-doc\n')}
+		<!-- Only the backend's exact fence form becomes a card; any other trc-doc fence
+		     (````, ~~~, CRLF) falls through to CodeBlock so a model cannot forge a card. -->
+		<TrcDocCard text={token?.text ?? ''} {done} />
 	{:else if token.type === 'code'}
 		{#if token.raw.includes('```')}
 			<CodeBlock
