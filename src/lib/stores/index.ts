@@ -122,6 +122,10 @@ export const showChangelog = writable(false);
 
 export const showControls = writable(false);
 export const showEmbeds = writable(false);
+export const showTrcDoc = writable(false);
+export const trcDoc: Writable<
+	(import('$lib/utils/trc-doc').TrcDocCardData & { chatId: string }) | null
+> = writable(null);
 export const showOverview = writable(false);
 export const showArtifacts = writable(false);
 export const showCallOverlay = writable(false);
