@@ -1,5 +1,7 @@
 <script lang="ts">
 	// The chat card for a ```trc-doc fence (trc-backend spec 2026-10-06-document-viewer).
+	// Open is disabled until the chat has an id (a saved chat): the viewer route looks the
+	// chat up by id, and the backend emits no cards in temporary chats.
 	// The fence holds ids and counts only, never a name or a URL; the content is fetched by
 	// the viewer panel when the user presses Open. The card is deliberately quiet: it belongs
 	// to the message, and its one distinctive element is a content-free glyph of the
@@ -142,8 +144,9 @@
 			<button
 				type="button"
 				aria-label={openLabel}
+				disabled={!$chatId}
 				on:click={open}
-				class="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-blue-700 hover:shadow active:bg-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-gray-900"
+				class="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-blue-700 hover:shadow active:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none disabled:hover:bg-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-gray-900"
 			>
 				<svg
 					xmlns="http://www.w3.org/2000/svg"

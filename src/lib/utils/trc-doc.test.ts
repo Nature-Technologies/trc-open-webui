@@ -1,5 +1,48 @@
+import { marked } from 'marked';
 import { describe, expect, it } from 'vitest';
-import { expiryLabel, parseCsv, parseTrcDocCard, trcDocUrl } from './trc-doc';
+import { expiryLabel, isExactTrcDocFence, parseCsv, parseTrcDocCard, trcDocUrl } from './trc-doc';
+
+/** The first `code` token marked lexes from `md` (descending into blockquotes). */
+const codeToken = (md: string): { raw: string; text: string } => {
+	const find = (tokens: any[]): any =>
+		tokens.reduce(
+			(hit, t) => hit ?? (t.type === 'code' ? t : t.tokens ? find(t.tokens) : null),
+			null
+		);
+	const t = find(marked.lexer(md));
+	if (!t) throw new Error('no code token');
+	return t;
+};
+const exact = (md: string) => {
+	const t = codeToken(md);
+	return isExactTrcDocFence(t.raw, t.text);
+};
+
+describe('isExactTrcDocFence', () => {
+	const J = '{"v":1,"kind":"list"}';
+	it('accepts the backend fence form', () => {
+		expect(exact('```trc-doc\n' + J + '\n```')).toBe(true);
+		expect(exact('Before.\n\n```trc-doc\n' + J + '\n```\n\nAfter.')).toBe(true);
+		expect(isExactTrcDocFence('```trc-doc\n' + J + '\n```\n', J)).toBe(true);
+	});
+	it('accepts CRLF, because marked normalises it (the backend neutralises it first)', () => {
+		expect(exact('```trc-doc\r\n' + J + '\r\n```')).toBe(true);
+	});
+	it.each([
+		['four backticks', '````trc-doc\n' + J + '\n````'],
+		['tildes', '~~~trc-doc\n' + J + '\n~~~'],
+		['an indented closer', '```trc-doc\n' + J + '\n   ```'],
+		['an unclosed fence', '```trc-doc\n' + J],
+		['an extra info string', '```trc-doc extra\n' + J + '\n```'],
+		['an indented opener', '  ```trc-doc\n  ' + J + '\n  ```']
+	])('rejects %s', (_name, md) => {
+		expect(exact(md)).toBe(false);
+	});
+	it('rejects a raw without its closing fence', () => {
+		expect(isExactTrcDocFence('```trc-doc\n' + J, J)).toBe(false);
+		expect(isExactTrcDocFence('```trc-doc\n' + J + '\n```\n\n', J)).toBe(false);
+	});
+});
 
 const LIST = 'lst_' + 'A'.repeat(22);
 const card = (o: Record<string, unknown> = {}) =>

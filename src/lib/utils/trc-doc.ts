@@ -54,6 +54,17 @@ export const parseTrcDocCard = (text: string): TrcDocCardData | null => {
 	};
 };
 
+/**
+ * Whether a marked `code` token is the backend's exact card fence: "```trc-doc\n" +
+ * one JSON line + "\n```" (one trailing newline tolerated). Anything else — ````, ~~~,
+ * an indented closer, an unclosed fence, an extra info string — stays a code block, so
+ * a model cannot forge a card. marked normalises CRLF (and a bare CR) to "\n" before
+ * lexing, so those variants DO pass here; the backend neutralises them before they reach
+ * the chat (trc-backend `_defuse_doc_fences`), which is what keeps them out.
+ */
+export const isExactTrcDocFence = (raw: string, text: string): boolean =>
+	(raw.endsWith('\n') ? raw.slice(0, -1) : raw) === '```trc-doc\n' + text + '\n```';
+
 export const trcDocUrl = (
 	doc: Pick<TrcDocCardData, 'kind' | 'id'>,
 	chatId: string,

@@ -136,9 +136,10 @@
 	const onKeydown = (e: KeyboardEvent) => {
 		if (e.key !== 'Escape') return;
 		const t = e.target;
+		// Never let Escape reach the window: the mobile Drawer closes on it there.
+		e.stopPropagation();
 		// Escape in a non-empty search box clears it first, as the browser does.
 		if (t instanceof HTMLInputElement && t.type === 'search' && t.value) return;
-		e.stopPropagation();
 		close();
 	};
 
@@ -230,7 +231,7 @@
 			</div>
 			<div class="flex flex-wrap items-center gap-x-3 py-2">
 				{#if expired}
-					<span class="text-xs font-medium text-gray-400 dark:text-gray-500">Expired</span>
+					<span class="text-xs font-medium text-gray-500 dark:text-gray-400">Expired</span>
 				{:else}
 					{#each formats as fmt}
 						<a
