@@ -43,6 +43,7 @@
 	let highContrastMode = false;
 
 	let detectArtifacts = true;
+	let autoOpenTrcDocs = true;
 	let displayMultiModelResponsesInTabs = false;
 
 	let richTextInput = true;
@@ -216,6 +217,7 @@
 		highContrastMode = $settings?.highContrastMode ?? false;
 
 		detectArtifacts = $settings?.detectArtifacts ?? true;
+		autoOpenTrcDocs = $settings?.autoOpenTrcDocs ?? true;
 		responseAutoCopy = $settings?.responseAutoCopy ?? false;
 
 		showUsername = $settings?.showUsername ?? false;
@@ -1422,6 +1424,28 @@
 				</div>
 				<p class={settingDescriptionClass}>
 					{$i18n.t('Detect generated artifacts and show them in the artifact workspace.')}
+				</p>
+			</div>
+
+			<div>
+				<div class={settingRowClass}>
+					<div id="auto-open-trc-docs-label" class={settingLabelClass}>
+						{$i18n.t('Open Documents Automatically')}
+					</div>
+
+					<div class={settingControlClass}>
+						<Switch
+							ariaLabelledbyId="auto-open-trc-docs-label"
+							tooltip={true}
+							bind:state={autoOpenTrcDocs}
+							on:change={() => {
+								saveSettings({ autoOpenTrcDocs });
+							}}
+						/>
+					</div>
+				</div>
+				<p class={settingDescriptionClass}>
+					{$i18n.t('Open a list or report in the side panel as soon as an answer delivers it.')}
 				</p>
 			</div>
 

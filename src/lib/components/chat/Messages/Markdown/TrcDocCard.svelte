@@ -7,8 +7,22 @@
 	// to the message, and its one distinctive element is a content-free glyph of the
 	// document's shape (a ruled table for a list, a page for a report).
 	import { onDestroy, onMount } from 'svelte';
-	import { chatId, showArtifacts, showControls, showEmbeds, showTrcDoc, trcDoc } from '$lib/stores';
-	import { expiryLabel, parseTrcDocCard } from '$lib/utils/trc-doc';
+	import {
+		chatId,
+		mobile,
+		settings,
+		showArtifacts,
+		showControls,
+		showEmbeds,
+		showTrcDoc,
+		trcDoc
+	} from '$lib/stores';
+	import {
+		autoOpenedTrcDocs,
+		expiryLabel,
+		parseTrcDocCard,
+		shouldAutoOpenTrcDoc
+	} from '$lib/utils/trc-doc';
 
 	export let text: string;
 	export let done: boolean;
@@ -48,6 +62,24 @@
 		showControls.set(true);
 		showTrcDoc.set(true);
 	};
+
+	// Open by itself once, the moment a just-issued card first appears — the way Open
+	// WebUI auto-opens an Artifacts block. Decided ONCE per card: a card that arrived
+	// while another panel was open must not pop up later when that panel closes.
+	let considered = false;
+	$: if (card && !considered) {
+		considered = true;
+		const autoOpen = shouldAutoOpenTrcDoc(card, {
+			enabled: $settings?.autoOpenTrcDocs ?? true,
+			mobile: $mobile,
+			chatId: $chatId,
+			panelBusy: $showArtifacts || $showEmbeds || $showTrcDoc
+		});
+		// Remembered page-wide whatever the outcome, so a re-render (which re-mounts this
+		// card) never reconsiders it — e.g. after the user closed the panel it opened.
+		autoOpenedTrcDocs.add(card.id);
+		if (autoOpen) open();
+	}
 </script>
 
 {#if card}

@@ -207,6 +207,7 @@ type Settings = {
 	pinnedModels?: never[];
 	toolServers?: never[];
 	detectArtifacts?: boolean;
+	autoOpenTrcDocs?: boolean; // TRC document viewer: open a just-delivered list or report
 	showUpdateToast?: boolean;
 	showChangelog?: boolean;
 	showEmojiInCall?: boolean;

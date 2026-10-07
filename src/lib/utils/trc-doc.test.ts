@@ -1,6 +1,13 @@
 import { marked } from 'marked';
 import { describe, expect, it } from 'vitest';
-import { expiryLabel, isExactTrcDocFence, parseCsv, parseTrcDocCard, trcDocUrl } from './trc-doc';
+import {
+	expiryLabel,
+	isExactTrcDocFence,
+	parseCsv,
+	parseTrcDocCard,
+	shouldAutoOpenTrcDoc,
+	trcDocUrl
+} from './trc-doc';
 
 /** The first `code` token marked lexes from `md` (descending into blockquotes). */
 const codeToken = (md: string): { raw: string; text: string } => {
@@ -136,5 +143,59 @@ describe('expiryLabel', () => {
 	});
 	it('is null without a time', () => {
 		expect(expiryLabel(null, now)).toBeNull();
+	});
+});
+
+describe('shouldAutoOpenTrcDoc', () => {
+	const now = new Date('2026-10-07T10:00:30Z');
+	const fresh = () =>
+		parseTrcDocCard(
+			JSON.stringify({
+				v: 1,
+				kind: 'list',
+				id: 'lst_' + 'A'.repeat(22),
+				title: 'TRC list',
+				rows: 48,
+				formats: ['csv', 'pdf'],
+				expires_at: '2026-10-07T10:15:00+00:00',
+				issued_at: '2026-10-07T10:00:00+00:00'
+			})
+		);
+	const opts = (o: Record<string, unknown> = {}) => ({
+		now,
+		enabled: true,
+		mobile: false,
+		chatId: 'c1',
+		panelBusy: false,
+		opened: new Set<string>(),
+		...o
+	});
+
+	it('opens a card that just arrived', () => {
+		expect(shouldAutoOpenTrcDoc(fresh(), opts())).toBe(true);
+	});
+	it('never opens an old card (reopening a chat, scrolling back)', () => {
+		const later = new Date('2026-10-07T10:02:00Z');
+		expect(shouldAutoOpenTrcDoc(fresh(), opts({ now: later }))).toBe(false);
+	});
+	it('never opens a card without an issue time (older backend)', () => {
+		const card = { ...fresh()!, issued_at: null };
+		expect(shouldAutoOpenTrcDoc(card, opts())).toBe(false);
+	});
+	it.each([
+		['turned off', { enabled: false }],
+		['on mobile', { mobile: true }],
+		['with no saved chat', { chatId: '' }],
+		['over a panel the user has open', { panelBusy: true }]
+	])('stays closed %s', (_, o) => {
+		expect(shouldAutoOpenTrcDoc(fresh(), opts(o))).toBe(false);
+	});
+	it('opens each card at most once', () => {
+		const card = fresh()!;
+		expect(shouldAutoOpenTrcDoc(card, opts({ opened: new Set([card.id]) }))).toBe(false);
+	});
+	it('never opens an expired card', () => {
+		const card = { ...fresh()!, expires_at: '2026-10-07T10:00:10+00:00' };
+		expect(shouldAutoOpenTrcDoc(card, opts())).toBe(false);
 	});
 });
