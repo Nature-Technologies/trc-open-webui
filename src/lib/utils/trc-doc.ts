@@ -18,6 +18,8 @@ export interface TrcDocCardData {
 	pages: number | null;
 	formats: TrcDocFormat[];
 	expires_at: string | null;
+	/** When the backend issued this card — the signal that it just arrived. */
+	issued_at: string | null;
 }
 
 const ID_SHAPES: Record<TrcDocKind, RegExp> = {
@@ -50,8 +52,43 @@ export const parseTrcDocCard = (text: string): TrcDocCardData | null => {
 		rows: intOrNull(o.rows),
 		pages: intOrNull(o.pages),
 		formats: [...new Set(o.formats as TrcDocFormat[])],
-		expires_at: typeof o.expires_at === 'string' ? o.expires_at : null
+		expires_at: typeof o.expires_at === 'string' ? o.expires_at : null,
+		issued_at: typeof o.issued_at === 'string' ? o.issued_at : null
 	};
+};
+
+/** How recently a card must have been issued to open itself (ms). */
+export const AUTO_OPEN_WINDOW_MS = 60_000;
+
+/** Card ids that have already opened themselves in this page — each opens at most once. */
+export const autoOpenedTrcDocs = new Set<string>();
+
+/**
+ * Whether a card should open the viewer by itself, the way Open WebUI auto-opens an
+ * Artifacts block. Only a card that has JUST arrived (issued within the window — so
+ * reopening an old chat or scrolling back never pops anything), only on desktop, only
+ * when the user has not turned it off, never twice for one card, and never over a panel
+ * the user already has open.
+ */
+export const shouldAutoOpenTrcDoc = (
+	card: TrcDocCardData | null,
+	opts: {
+		now?: Date;
+		enabled: boolean;
+		mobile: boolean;
+		chatId: string;
+		panelBusy: boolean;
+		opened?: Set<string>;
+	}
+): boolean => {
+	if (!card || !opts.enabled || opts.mobile || !opts.chatId || opts.panelBusy) return false;
+	if ((opts.opened ?? autoOpenedTrcDocs).has(card.id)) return false;
+	if (!card.issued_at) return false;
+	const issued = new Date(card.issued_at).getTime();
+	if (Number.isNaN(issued)) return false;
+	const age = (opts.now ?? new Date()).getTime() - issued;
+	if (age < -5_000 || age > AUTO_OPEN_WINDOW_MS) return false; // small clock-skew allowance
+	return expiryLabel(card.expires_at, opts.now) !== 'Expired';
 };
 
 /**
