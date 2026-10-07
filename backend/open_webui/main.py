@@ -166,6 +166,7 @@ from open_webui.routers import (
     tasks,
     terminals,
     tools,
+    trc_docs,
     users,
     utils,
 )
@@ -804,6 +805,7 @@ app.include_router(users.router, prefix='/api/v1/users', tags=['users'])
 app.include_router(channels.router, prefix='/api/v1/channels', tags=['channels'])
 app.include_router(chats.router, prefix='/api/v1/chats', tags=['chats'])
 app.include_router(notes.router, prefix='/api/v1/notes', tags=['notes'])
+app.include_router(trc_docs.router, prefix='/api/v1/trc', tags=['trc'])
 
 
 app.include_router(models.router, prefix='/api/v1/models', tags=['models'])

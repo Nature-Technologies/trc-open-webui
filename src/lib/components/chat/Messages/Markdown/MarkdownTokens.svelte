@@ -25,6 +25,8 @@
 	import HtmlToken from './HTMLToken.svelte';
 	import Clipboard from '$lib/components/icons/Clipboard.svelte';
 	import ColonFenceBlock from './ColonFenceBlock.svelte';
+	import TrcDocCard from './TrcDocCard.svelte';
+	import { isExactTrcDocFence } from '$lib/utils/trc-doc';
 
 	export let id: string;
 	export let tokens: Token[];
@@ -160,6 +162,11 @@
 				{onSourceClick}
 			/>
 		</svelte:element>
+	{:else if token.type === 'code' && (token?.lang ?? '') === 'trc-doc' && isExactTrcDocFence(token.raw ?? '', token?.text ?? '')}
+		<!-- Only the backend's exact fence form becomes a card; any other trc-doc fence
+		     (````, ~~~, indented or missing closer) falls through to CodeBlock so a model
+		     cannot forge a card. The backend also neutralises such fences at the outlet. -->
+		<TrcDocCard text={token?.text ?? ''} {done} />
 	{:else if token.type === 'code'}
 		{#if token.raw.includes('```')}
 			<CodeBlock
