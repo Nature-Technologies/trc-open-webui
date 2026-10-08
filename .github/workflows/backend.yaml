@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12']
+        python-version: ['3.11'] # matches the 3.11 production image; 3.12 dropped to save CI minutes
     steps:
       - uses: actions/checkout@v5
 
@@ -56,7 +56,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12']
+        python-version: ['3.11'] # matches the 3.11 production image; 3.12 dropped to save CI minutes
     steps:
       - uses: actions/checkout@v5
 
