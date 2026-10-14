@@ -6,6 +6,8 @@ import {
 	parseCsv,
 	parseTrcDocCard,
 	shouldAutoOpenTrcDoc,
+	trcDocKey,
+	trcDocRegenerateUrl,
 	trcDocUrl
 } from './trc-doc';
 
@@ -103,6 +105,34 @@ describe('trcDocUrl', () => {
 		expect(url).toContain('chat_id=chat+1%2Fx');
 		expect(url).toContain('format=csv');
 		expect(url).toContain('download=true');
+	});
+});
+
+describe('trcDocRegenerateUrl', () => {
+	it('builds the same-origin regenerate route with an encoded chat id', () => {
+		const url = trcDocRegenerateUrl({ kind: 'report', id: 'R'.repeat(32) }, 'chat 1/x');
+		expect(url).toContain(`/api/v1/trc/docs/report/${'R'.repeat(32)}/regenerate?`);
+		expect(url).toContain('chat_id=chat+1%2Fx');
+		expect(url).not.toContain('format=');
+	});
+});
+
+describe('trcDocKey', () => {
+	const doc = {
+		chatId: 'c1',
+		kind: 'list' as const,
+		id: LIST,
+		expires_at: '2026-10-14T12:15:00+00:00'
+	};
+	it('changes when only the expiry changes, so a regenerated document reloads', () => {
+		expect(trcDocKey(doc)).not.toBe(trcDocKey({ ...doc, expires_at: '2026-10-14T13:00:00+00:00' }));
+	});
+	it('is stable for the same document, and empty for none', () => {
+		expect(trcDocKey(doc)).toBe(trcDocKey({ ...doc }));
+		expect(trcDocKey(null)).toBe('');
+	});
+	it('separates chats', () => {
+		expect(trcDocKey(doc)).not.toBe(trcDocKey({ ...doc, chatId: 'c2' }));
 	});
 });
 
