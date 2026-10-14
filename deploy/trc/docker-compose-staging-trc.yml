@@ -140,10 +140,13 @@ services:
       # (artifacts, previews) inherit it on top of IFRAME_CSP. 'self', data: and blob:
       # are the only sources. Measured against the built app in a real browser:
       # 'unsafe-inline' scripts are SvelteKit's inline bootstrap, and 'unsafe-eval' is
-      # vega's expression compiler (vega-lite charts need it). The Google Fonts
-      # stylesheet in app.html is blocked, so the UI falls back to its system fonts.
+      # vega's expression compiler (vega-lite charts need it). connect-src lists data:
+      # and blob: because the chat input fetch()es the data: URL of every attached,
+      # pasted or dropped image to upload it (neither scheme leaves the browser). The
+      # Google Fonts stylesheet in app.html is blocked, so the UI falls back to system
+      # fonts.
       # frame-ancestors is left unset on purpose. validate_compose.py pins this value.
-      CONTENT_SECURITY_POLICY: "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
+      CONTENT_SECURITY_POLICY: "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
       # The new-chat starter prompts (spec section 12.2), replacing upstream's
       # generic six. A JSON list of {"title": [line 1, line 2], "content": prompt};
       # choosing one sends its content at once. Invalid JSON or an empty list

@@ -88,12 +88,16 @@ EXPECTED_IFRAME_CSP = (
 # previews), which inherit it on top of their own IFRAME_CSP. Measured in a real browser
 # against the built app: 'unsafe-inline' for scripts is SvelteKit's inline bootstrap in
 # index.html, and 'unsafe-eval' is vega's expression compiler (a vega-lite chart fails to
-# render without it). Not set on purpose: frame-ancestors (who may embed the app is a
-# deployment decision). A CSP cannot block a navigation, so links stay as they are.
+# render without it). connect-src also lists data: and blob:, which never leave the browser:
+# the chat input turns every attached, pasted or dropped image into a data: URL and then
+# fetch()es it to get a Blob to upload, and the image preview's download/copy fetch() a
+# data:/blob: src, so with 'self' alone image attachments silently never upload. Not set on
+# purpose: frame-ancestors (who may embed the app is a deployment decision). A CSP cannot
+# block a navigation, so links stay as they are.
 EXPECTED_CONTENT_SECURITY_POLICY = (
     "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
     "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; "
-    "font-src 'self' data:; connect-src 'self'; frame-src 'self' blob:; worker-src 'self' blob:; "
+    "font-src 'self' data:; connect-src 'self' data: blob:; frame-src 'self' blob:; worker-src 'self' blob:; "
     "object-src 'none'; base-uri 'self'; form-action 'self'"
 )
 
@@ -203,6 +207,15 @@ def check_env_example_declares_every_reference() -> None:
     )
 
 
+def csp_sources(policy: object, directive: str) -> list[str] | None:
+    """The source list of one directive in a CSP string, or None when it is not there."""
+    for part in str(policy or '').split(';'):
+        tokens = part.split()
+        if tokens and tokens[0].lower() == directive:
+            return tokens[1:]
+    return None
+
+
 def check_hardening_env(env: dict) -> None:
     """Assert the staging hardening switches (spec section 12.3) are set and off."""
     for key, why in EXPECTED_DISABLED_FEATURES.items():
@@ -225,6 +238,17 @@ def check_hardening_env(env: dict) -> None:
         'layer that stops the browser fetching a model-chosen third-party URL (image, media, '
         'frame, font, stylesheet, script, fetch, WebSocket) from anywhere in the app, and the '
         f'srcdoc iframes inherit it. Got {env.get("CONTENT_SECURITY_POLICY")!r}',
+    )
+    # connect-src needs data: and blob: (the chat input fetch()es the data: URL of every
+    # attached image to upload it, and the image preview fetch()es its src) and must name no
+    # host: 'self', data: and blob: never leave the browser, anything else is a third party.
+    connect = csp_sources(env.get('CONTENT_SECURITY_POLICY'), 'connect-src')
+    check(
+        connect is not None and {'data:', 'blob:'} <= set(connect) and set(connect) <= {"'self'", 'data:', 'blob:'},
+        "CONTENT_SECURITY_POLICY's connect-src must be 'self' plus data: and blob: and nothing else -- "
+        'without data:/blob: every image attached, pasted or dropped into the chat silently fails to '
+        'upload (the input fetch()es its data: URL), and any other source lets the browser reach '
+        f'a third party. Got {connect!r}',
     )
 
 

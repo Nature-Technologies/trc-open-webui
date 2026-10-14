@@ -423,3 +423,20 @@ class TestRegenerateBackendAnswers:
         line = next(r.getMessage() for r in caplog.records if 'trc_docs: regenerate' in r.getMessage())
         assert f'doc={LIST_ID}' in line
         assert 'user=u1' in line and 'chat=c1' in line
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        'session',
+        [
+            FakeSession(_json({'detail': 'Internal Server Error'}, status=500)),
+            FakeSession(error=aiohttp.ClientError('boom')),
+        ],
+        ids=['off-contract answer', 'transport error'],
+    )
+    async def test_the_503_warning_names_the_document(self, session, caplog):
+        caplog.set_level(logging.WARNING)
+        with pytest.raises(HTTPException) as exc:
+            await _regen(session)
+        assert exc.value.status_code == 503
+        line = next(r.getMessage() for r in caplog.records if 'trc_docs: regenerate' in r.getMessage())
+        assert f'doc={LIST_ID}' in line

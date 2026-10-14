@@ -219,7 +219,7 @@ async def regenerate_trc_doc(
             status = resp.status
             data = await _read_json(resp) if status in (200, 202, 409) else None
     except (TimeoutError, aiohttp.ClientError) as exc:
-        log.warning('trc_docs: regenerate unreachable (%s) kind=%s', type(exc).__name__, kind)
+        log.warning('trc_docs: regenerate unreachable (%s) kind=%s doc=%s', type(exc).__name__, kind, doc_id)
         raise HTTPException(status_code=503, detail='Document service unavailable')
 
     if status == 404:
@@ -228,7 +228,7 @@ async def regenerate_trc_doc(
         raise HTTPException(status_code=429, detail='Too many document requests; try again shortly')
     body = _regenerate_body(status, kind, doc_id, data)
     if body is None:
-        log.warning('trc_docs: regenerate backend status %s kind=%s', status, kind)
+        log.warning('trc_docs: regenerate backend status %s kind=%s doc=%s', status, kind, doc_id)
         raise HTTPException(status_code=503, detail='Document service unavailable')
 
     log.info('trc_docs: regenerate user=%s chat=%s kind=%s doc=%s status=%s', user.id, chat_id, kind, doc_id, status)
