@@ -150,7 +150,8 @@ async def _read_json(resp):
         chunks.append(chunk)
     try:
         return json.loads(b''.join(chunks))
-    except ValueError:
+    except (ValueError, RecursionError):
+        # RecursionError: a deeply nested body fits under the size cap and json.loads raises it.
         return None
 
 
@@ -230,5 +231,5 @@ async def regenerate_trc_doc(
         log.warning('trc_docs: regenerate backend status %s kind=%s', status, kind)
         raise HTTPException(status_code=503, detail='Document service unavailable')
 
-    log.info('trc_docs: regenerate user=%s chat=%s kind=%s status=%s', user.id, chat_id, kind, status)
+    log.info('trc_docs: regenerate user=%s chat=%s kind=%s doc=%s status=%s', user.id, chat_id, kind, doc_id, status)
     return JSONResponse(status_code=status, content=body, headers={'Cache-Control': 'no-store'})

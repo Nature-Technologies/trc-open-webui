@@ -65,6 +65,7 @@
 	import FullHeightIframe from '$lib/components/common/FullHeightIframe.svelte';
 	import OutputEditView from './OutputEditView.svelte';
 	import { getOutputText, replaceOutputMessageText, type OutputItem } from './structuredOutput';
+	import { stripTrcMachineBlocks } from '$lib/utils/trc-blocks';
 	import { trcFollowUpsFromParts } from '$lib/utils/trc-followups';
 
 	interface MessageType {
@@ -187,8 +188,11 @@
 		(model?.info?.meta?.capabilities?.status_updates ?? true) &&
 		statusEntries.length > 0 &&
 		!(statusEntries.at(-1)?.hidden ?? false);
-	$: visibleResponseContent =
-		getOutputText(message.output) || removeAllDetails(message.content ?? '');
+	// What Copy, Read aloud and Insert-into-note take: the answer without the TRC machine blocks
+	// (follow-ups list, document card fence, citation comment), which the UI shows another way.
+	$: visibleResponseContent = stripTrcMachineBlocks(
+		getOutputText(message.output) || removeAllDetails(message.content ?? '')
+	);
 	$: hasResponseContent = Boolean((message.content ?? '').trim() || message.output?.length);
 
 	// TRC follow-ups (contract C3): parsed from the ```trc:followups block the redaction

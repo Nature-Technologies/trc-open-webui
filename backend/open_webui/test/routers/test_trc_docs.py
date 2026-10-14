@@ -406,3 +406,20 @@ class TestRegenerateBackendAnswers:
             await _regen(FakeSession(error=aiohttp.ClientError(f'bad http://u:{KEY}@h/')))
         assert 'trc_docs: regenerate' in caplog.text
         assert KEY not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_deeply_nested_body_is_503_not_a_crash(self):
+        """json.loads raises RecursionError (not ValueError) on a deeply nested document, and
+        60k brackets fit under the size cap. The card must still get its 503, never a 500."""
+        resp = FakeResponse(status=200, body=b'[' * 60000, content_type='application/json')
+        with pytest.raises(HTTPException) as exc:
+            await _regen(FakeSession(resp))
+        assert exc.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_the_log_line_names_the_document(self, caplog):
+        caplog.set_level(logging.INFO)
+        await _regen(FakeSession(_json(OK_BODY)))
+        line = next(r.getMessage() for r in caplog.records if 'trc_docs: regenerate' in r.getMessage())
+        assert f'doc={LIST_ID}' in line
+        assert 'user=u1' in line and 'chat=c1' in line
