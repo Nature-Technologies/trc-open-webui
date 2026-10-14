@@ -1975,9 +1975,11 @@ const cleanupMermaidTempElements = (id: string) => {
 	document.getElementById(`i${id}`)?.remove();
 };
 
-// Mermaid runs at securityLevel 'strict' (initMermaid): HTML in labels is encoded and click
-// callbacks are off. Its SVG still goes into innerHTML/{@html} sinks, so active content is
-// stripped here as well.
+// Mermaid runs at securityLevel 'strict' (initMermaid), which encodes HTML in labels and
+// turns click callbacks off, but still emits <a xlink:href="https://…"> for `click X href`
+// and <image xlink:href> for icons. Mermaid SVG is rendered into the page, so every href is
+// dropped here whatever its value: a diagram can neither link out nor load anything.
+// DOMPurify's FORBID_ATTR always wins over ADD_ATTR.
 export const sanitizeSvg = (svg: string): string =>
 	DOMPurify.sanitize(svg, {
 		USE_PROFILES: { svg: true, svgFilters: true },
@@ -1996,8 +1998,6 @@ export const sanitizeSvg = (svg: string): string =>
 			'refX',
 			'refY',
 			'orient',
-			'href',
-			'xlink:href',
 			'dominant-baseline',
 			'text-anchor',
 			'clipPathUnits',
@@ -2011,6 +2011,7 @@ export const sanitizeSvg = (svg: string): string =>
 			'aria-hidden',
 			'tabindex'
 		],
+		FORBID_ATTR: ['href', 'xlink:href'],
 		SANITIZE_DOM: true
 	});
 
