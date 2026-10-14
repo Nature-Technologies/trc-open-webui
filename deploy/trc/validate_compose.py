@@ -126,7 +126,7 @@ EXPECTED_BUILD_DOCKERFILE = 'deploy/trc/Dockerfile'
 # To re-pin after an upstream change, re-apply the TRC deltas to
 # deploy/trc/Dockerfile and then:
 #   python -c "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('Dockerfile').read_bytes().replace(b'\r\n',b'\n')).hexdigest())"
-EXPECTED_UPSTREAM_DOCKERFILE_SHA256 = '242789dfbc58d41a3528b9490e93a6b73955cadb097475c6549faf243d89d167'
+EXPECTED_UPSTREAM_DOCKERFILE_SHA256 = '0f38d4424b75b057295eccf48ba3ef1e3edf1f662e646d1bed32c54840cc35c8'
 
 failures: list[str] = []
 
@@ -973,7 +973,9 @@ def check_deploy_workflow() -> None:
     # Named steps of this flow. Asserted by name because each carries a property
     # nothing else does, so a rename that quietly drops one would otherwise
     # leave the whole file passing.
-    for step_name in ('Verify host preconditions', 'Deploy', 'Smoke test'):
+    # 'Smoke test' was removed from the deploy deliberately (cb3adc3e7, #3); the
+    # Deploy step's own compose up/wait is the health gate now.
+    for step_name in ('Verify host preconditions', 'Deploy'):
         check(
             _step_by_name(doc, step_name) is not None,
             f'no step named {step_name!r} -- expected one of the steps of the build-on-the-deploy-host flow',

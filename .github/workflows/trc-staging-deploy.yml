@@ -467,6 +467,10 @@ jobs:
           # ${VAR:?} spelling for this one, so an unset or empty secret fails
           # the deploy instead of silently disabling the PII purge on delete.
           RAGNAROK_SERVICE_KEY: ${{ secrets.RAGNAROK_SERVICE_KEY }}
+          # Token lifetimes the compose file reads. Same defaults it falls back to
+          # (-1 = no expiry, 86400 s); override with a repository variable.
+          JWT_EXPIRES_IN: ${{ vars.JWT_EXPIRES_IN || '-1' }}
+          FORWARD_USER_INFO_HEADER_JWT_EXPIRES_SECONDS: ${{ vars.FORWARD_USER_INFO_HEADER_JWT_EXPIRES_SECONDS || '86400' }}
         run: |
           set -eu
           echo "deploying $OPENWEBUI_IMAGE"
