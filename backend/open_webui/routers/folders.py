@@ -15,6 +15,7 @@ from open_webui.internal.db import get_async_session
 from open_webui.models.chat_messages import ChatMessages
 from open_webui.models.config import Config
 from open_webui.models.chats import Chats
+from open_webui.models.feedbacks import Feedbacks
 from open_webui.models.folders import (
     FolderForm,
     FolderModel,
@@ -752,5 +753,10 @@ async def delete_folder_by_id(
     # every chat and folder row is already committed and every grant already
     # revoked, so a slow, unreachable or cancelled RAGnarok can now only cost
     # this request time it has bounded -- it can no longer skip anything.
+    #
+    # The feedback purge goes first: it is local and never raises, and a feedback row's
+    # snapshot is a full, unmasked copy of the chat it rates, so a cancelled or stalled
+    # RAGnarok call must not be able to leave one behind.
+    await Feedbacks.purge_feedbacks_by_chat_ids(deleted_chat_ids, db=db)
     await notify_chats_deleted(folder_owner_id, deleted_chat_ids)
     return True

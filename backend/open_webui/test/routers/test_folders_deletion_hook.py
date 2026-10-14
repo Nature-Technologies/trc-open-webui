@@ -325,3 +325,73 @@ class TestFolderDeletionNeverErasesTheWholeUser:
 
         assert result is True
         assert posts == []
+
+
+class TestFolderFeedbackPurge:
+    """Every chat a folder delete removes takes its feedback rows with it -- each row's
+    snapshot is a full, unmasked copy of that chat."""
+
+    @pytest.mark.asyncio
+    async def test_purges_feedback_for_every_deleted_chat(self):
+        user = SimpleNamespace(id='owner-1', role='user')
+        folder = _folder(id='folder-1', user_id='owner-1')
+
+        with ExitStack() as stack:
+            _apply_base_patches(stack, folder, folder_ids=['folder-1'], chat_ids=['chat-a', 'chat-b'])
+            stack.enter_context(patch.object(folders_router, 'notify_chats_deleted', new=AsyncMock()))
+            mock_purge = stack.enter_context(
+                patch.object(folders_router.Feedbacks, 'purge_feedbacks_by_chat_ids', new=AsyncMock())
+            )
+
+            result = await folders_router.delete_folder_by_id(
+                request=_request(), id='folder-1', delete_contents=True, user=user, db=MagicMock()
+            )
+
+        assert result is True
+        assert mock_purge.await_count == 1
+        assert mock_purge.await_args.args == (['chat-a', 'chat-b'],)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('delete_contents,delete_result', [(False, True), (True, False)])
+    async def test_purges_nothing_when_no_chat_was_deleted(self, delete_contents, delete_result):
+        """Chats moved out of the folder, or a chat delete that failed: nothing is gone."""
+        user = SimpleNamespace(id='owner-1', role='user')
+        folder = _folder(id='folder-1', user_id='owner-1')
+
+        with ExitStack() as stack:
+            _apply_base_patches(
+                stack, folder, folder_ids=['folder-1'], chat_ids=['chat-a'], delete_result=delete_result
+            )
+            stack.enter_context(patch.object(folders_router, 'notify_chats_deleted', new=AsyncMock()))
+            mock_purge = stack.enter_context(
+                patch.object(folders_router.Feedbacks, 'purge_feedbacks_by_chat_ids', new=AsyncMock())
+            )
+
+            await folders_router.delete_folder_by_id(
+                request=_request(), id='folder-1', delete_contents=delete_contents, user=user, db=MagicMock()
+            )
+
+        assert mock_purge.await_args.args == ([],)
+
+    @pytest.mark.asyncio
+    async def test_a_cancelled_notification_cannot_skip_the_purge(self):
+        user = SimpleNamespace(id='owner-1', role='user')
+        folder = _folder(id='folder-1', user_id='owner-1')
+
+        with ExitStack() as stack:
+            _apply_base_patches(stack, folder, folder_ids=['folder-1'], chat_ids=['chat-a'])
+            stack.enter_context(
+                patch.object(
+                    folders_router, 'notify_chats_deleted', new=AsyncMock(side_effect=asyncio.CancelledError())
+                )
+            )
+            mock_purge = stack.enter_context(
+                patch.object(folders_router.Feedbacks, 'purge_feedbacks_by_chat_ids', new=AsyncMock())
+            )
+
+            with pytest.raises(asyncio.CancelledError):
+                await folders_router.delete_folder_by_id(
+                    request=_request(), id='folder-1', delete_contents=True, user=user, db=MagicMock()
+                )
+
+        assert mock_purge.await_args.args == (['chat-a'],)
