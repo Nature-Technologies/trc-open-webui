@@ -65,6 +65,7 @@
 	import FullHeightIframe from '$lib/components/common/FullHeightIframe.svelte';
 	import OutputEditView from './OutputEditView.svelte';
 	import { getOutputText, replaceOutputMessageText, type OutputItem } from './structuredOutput';
+	import { trcFollowUpsFromParts } from '$lib/utils/trc-followups';
 
 	interface MessageType {
 		id: string;
@@ -89,6 +90,7 @@
 			query?: string;
 		};
 		done: boolean;
+		followUps?: string[];
 		error?: boolean | { content: string };
 		sources?: string[];
 		code_executions?: {
@@ -188,6 +190,15 @@
 	$: visibleResponseContent =
 		getOutputText(message.output) || removeAllDetails(message.content ?? '');
 	$: hasResponseContent = Boolean((message.content ?? '').trim() || message.output?.length);
+
+	// TRC follow-ups (contract C3): parsed from the ```trc:followups block the redaction
+	// filter leaves on a finished answer, falling back to the streamed output text. Derived
+	// on every render and never written back to the message, so nothing new is persisted.
+	// A TRC block wins over Open WebUI's own follow-ups, which staging keeps switched off.
+	$: trcFollowUps = message?.done
+		? trcFollowUpsFromParts(message.content ?? '', getOutputText(message.output))
+		: [];
+	$: followUps = trcFollowUps.length > 0 ? trcFollowUps : (message?.followUps ?? []);
 
 	let edit = false;
 	let editedContent = '';
@@ -1586,10 +1597,10 @@
 						/>
 					{/if}
 
-					{#if (isLastMessage || ($settings?.keepFollowUpPrompts ?? false)) && message.done && !readOnly && (message?.followUps ?? []).length > 0}
+					{#if (isLastMessage || ($settings?.keepFollowUpPrompts ?? false)) && message.done && !readOnly && followUps.length > 0}
 						<div class="my-2.5" in:fade={{ duration: 100 }}>
 							<FollowUps
-								followUps={message?.followUps}
+								{followUps}
 								onClick={(prompt) => {
 									if ($settings?.insertFollowUpPrompt ?? false) {
 										// Insert the follow-up prompt into the input box

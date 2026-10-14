@@ -27,6 +27,7 @@
 	import ColonFenceBlock from './ColonFenceBlock.svelte';
 	import TrcDocCard from './TrcDocCard.svelte';
 	import { isExactTrcDocFence } from '$lib/utils/trc-doc';
+	import { isTrcFollowUpsToken } from '$lib/utils/trc-followups';
 
 	export let id: string;
 	export let tokens: Token[];
@@ -162,6 +163,9 @@
 				{onSourceClick}
 			/>
 		</svelte:element>
+	{:else if isTrcFollowUpsToken(token)}
+		<!-- A ```trc:followups block (contract C3) is data, never text: ResponseMessage shows
+		     it as the follow-up list. Every form of the fence is hidden, valid or not. -->
 	{:else if token.type === 'code' && (token?.lang ?? '') === 'trc-doc' && isExactTrcDocFence(token.raw ?? '', token?.text ?? '')}
 		<!-- Only the backend's exact fence form becomes a card; any other trc-doc fence
 		     (````, ~~~, indented or missing closer) falls through to CodeBlock so a model
