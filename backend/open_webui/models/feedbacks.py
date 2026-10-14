@@ -11,6 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger(__name__)
 
+# Chat ids per DELETE in purge_feedbacks_by_chat_ids: well under SQLite's bound-variable
+# limit on every version, so a folder of any size purges in a few statements.
+_PURGE_BATCH = 500
+
 
 ####################
 # Feedback DB Schema
@@ -538,6 +542,59 @@ class FeedbackTable:
             result = await db.execute(delete(Feedback))
             await db.commit()
             return result.rowcount > 0
+
+    async def purge_feedbacks_by_chat_ids(self, chat_ids: list[str], db: Optional[AsyncSession] = None) -> int:
+        """Delete every feedback row whose ``meta.chat_id`` is one of ``chat_ids``.
+
+        A feedback row's ``snapshot`` is a full copy of the chat it rates, with the
+        restored (unmasked) answers in it, so it must not outlive that chat. Keyed on the
+        chat, not on who wrote the row: once the chat is gone, every copy of it goes.
+
+        Called on the chat-destroy paths AFTER the chat delete has committed, so it never
+        raises: a failure is logged and reported as 0 rows, and the chat delete stands.
+        Returns the number of rows deleted.
+        """
+        ids = list(dict.fromkeys(c for c in chat_ids or [] if c))
+        if not ids:
+            return 0
+        deleted = 0
+        try:
+            async with get_async_db_context(db) as db:
+                for start in range(0, len(ids), _PURGE_BATCH):
+                    batch = ids[start : start + _PURGE_BATCH]
+                    result = await db.execute(
+                        delete(Feedback)
+                        .where(Feedback.meta['chat_id'].as_string().in_(batch))
+                        .execution_options(synchronize_session=False)
+                    )
+                    deleted += result.rowcount or 0
+                await db.commit()
+        except Exception as e:
+            log.error(f'Feedback purge failed for {len(ids)} chat(s): {type(e).__name__}')
+            return 0
+        return deleted
+
+    async def purge_feedbacks_by_user_id(self, user_id: str, db: Optional[AsyncSession] = None) -> int:
+        """Delete every feedback row ``user_id`` wrote; return how many.
+
+        For the paths that remove ALL of a user's chats (delete-all-my-chats, user
+        delete): every rating they gave carries a snapshot of one of those chats. Same
+        never-raises contract as ``purge_feedbacks_by_chat_ids``; unlike the upstream
+        ``delete_feedbacks_by_user_id`` above, which the evaluations route relies on to
+        raise.
+        """
+        if not user_id:
+            return 0
+        try:
+            async with get_async_db_context(db) as db:
+                result = await db.execute(
+                    delete(Feedback).where(Feedback.user_id == user_id).execution_options(synchronize_session=False)
+                )
+                await db.commit()
+                return result.rowcount or 0
+        except Exception as e:
+            log.error(f'Feedback purge failed for a user: {type(e).__name__}')
+            return 0
 
 
 Feedbacks = FeedbackTable()
