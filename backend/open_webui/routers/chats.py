@@ -32,6 +32,7 @@ from open_webui.models.chats import (
     is_internal_chat,
     MessageStats,
 )
+from open_webui.models.feedbacks import Feedbacks
 from open_webui.models.folders import Folders
 from open_webui.models.shared_chats import SharedChatResponse, SharedChats
 from open_webui.models.tags import TagModel, Tags
@@ -700,6 +701,9 @@ async def delete_all_user_chats(
             subject_id=user.id,
             subject_type='user',
         )
+        # Every rating this user gave holds a full, unmasked snapshot of one of the chats
+        # just deleted. Local and never-raising, so it runs before the remote call below.
+        await Feedbacks.purge_feedbacks_by_user_id(user.id, db=db)
         await notify_user_chats_deleted(user.id)
     return result
 
@@ -1626,7 +1630,8 @@ async def delete_chat_by_id(
     await Chats.delete_orphan_tags_for_user(chat.meta.get('tags', []), user.id, threshold=1, db=db)
 
     # Cascade to internal child chats spawned from this one.
-    for child_id in await Chats.get_internal_chat_ids_by_parent_id(id, chat.user_id):
+    child_ids = await Chats.get_internal_chat_ids_by_parent_id(id, chat.user_id)
+    for child_id in child_ids:
         await stop_item_tasks(request.app.state.redis, child_id)
         await Chats.delete_chat_by_id_and_user_id(child_id, chat.user_id)
 
@@ -1643,6 +1648,10 @@ async def delete_chat_by_id(
             subject_id=id,
             data={'owner_id': chat.user_id},
         )
+        # A feedback row's snapshot is a full, unmasked copy of the chat it rates. Keyed
+        # on the chat ids, never on a user, so the admin branch removes the owner's
+        # ratings too. Local and never-raising, so it runs before the remote call below.
+        await Feedbacks.purge_feedbacks_by_chat_ids([id, *child_ids], db=db)
         # Key on the chat's owner, not the deleting admin -- otherwise this
         # purges nothing while leaving the real owner's PII mappings in place.
         await notify_chat_deleted(chat.user_id, id)

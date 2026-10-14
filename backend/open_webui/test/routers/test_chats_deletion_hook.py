@@ -177,3 +177,141 @@ class TestDeleteAllUserChats:
 
         assert result is False
         mock_notify.assert_not_awaited()
+
+
+class TestFeedbackPurgeOnChatDelete:
+    """A feedback row's snapshot is a full, unmasked copy of the chat it rates, so both
+    chat-delete routes purge it -- only after the delete succeeds, keyed on the chat."""
+
+    @pytest.mark.asyncio
+    async def test_admin_delete_purges_by_chat_id_including_children(self):
+        admin = SimpleNamespace(id='admin-1', role='admin')
+        chat = _chat(id='chat-1', user_id='owner-1')
+
+        with (
+            patch.object(chats_router, 'stop_item_tasks', new=AsyncMock()),
+            patch.object(chats_router.Chats, 'get_chat_by_id', new=AsyncMock(return_value=chat)),
+            patch.object(chats_router.Chats, 'delete_orphan_tags_for_user', new=AsyncMock()),
+            patch.object(
+                chats_router.Chats, 'get_internal_chat_ids_by_parent_id', new=AsyncMock(return_value=['child-1'])
+            ),
+            patch.object(chats_router.Chats, 'delete_chat_by_id_and_user_id', new=AsyncMock(return_value=True)),
+            patch.object(chats_router.Chats, 'delete_chat_by_id', new=AsyncMock(return_value=True)),
+            patch.object(chats_router, 'publish_event', new=AsyncMock()),
+            patch.object(chats_router, 'notify_chat_deleted', new=AsyncMock()),
+            patch.object(chats_router.Feedbacks, 'purge_feedbacks_by_chat_ids', new=AsyncMock()) as mock_purge,
+        ):
+            result = await chats_router.delete_chat_by_id(request=_request(), id='chat-1', user=admin, db=MagicMock())
+
+        assert result is True
+        assert mock_purge.await_count == 1
+        assert mock_purge.await_args.args == (['chat-1', 'child-1'],)
+
+    @pytest.mark.asyncio
+    async def test_owner_delete_purges_by_chat_id(self):
+        user = SimpleNamespace(id='owner-1', role='user')
+        chat = _chat(id='chat-1', user_id='owner-1')
+
+        with (
+            patch.object(chats_router, 'stop_item_tasks', new=AsyncMock()),
+            patch.object(chats_router, 'has_permission', new=AsyncMock(return_value=True)),
+            patch.object(chats_router.Config, 'get', new=AsyncMock(return_value={})),
+            patch.object(chats_router.Chats, 'get_chat_by_id_and_user_id', new=AsyncMock(return_value=chat)),
+            patch.object(chats_router.Chats, 'delete_orphan_tags_for_user', new=AsyncMock()),
+            patch.object(chats_router.Chats, 'get_internal_chat_ids_by_parent_id', new=AsyncMock(return_value=[])),
+            patch.object(chats_router.Chats, 'delete_chat_by_id_and_user_id', new=AsyncMock(return_value=True)),
+            patch.object(chats_router, 'publish_event', new=AsyncMock()),
+            patch.object(chats_router, 'notify_chat_deleted', new=AsyncMock()),
+            patch.object(chats_router.Feedbacks, 'purge_feedbacks_by_chat_ids', new=AsyncMock()) as mock_purge,
+        ):
+            result = await chats_router.delete_chat_by_id(request=_request(), id='chat-1', user=user, db=MagicMock())
+
+        assert result is True
+        assert mock_purge.await_args.args == (['chat-1'],)
+
+    @pytest.mark.asyncio
+    async def test_failed_delete_purges_nothing(self):
+        user = SimpleNamespace(id='owner-1', role='user')
+        chat = _chat(id='chat-1', user_id='owner-1')
+
+        with (
+            patch.object(chats_router, 'stop_item_tasks', new=AsyncMock()),
+            patch.object(chats_router, 'has_permission', new=AsyncMock(return_value=True)),
+            patch.object(chats_router.Config, 'get', new=AsyncMock(return_value={})),
+            patch.object(chats_router.Chats, 'get_chat_by_id_and_user_id', new=AsyncMock(return_value=chat)),
+            patch.object(chats_router.Chats, 'delete_orphan_tags_for_user', new=AsyncMock()),
+            patch.object(chats_router.Chats, 'get_internal_chat_ids_by_parent_id', new=AsyncMock(return_value=[])),
+            patch.object(chats_router.Chats, 'delete_chat_by_id_and_user_id', new=AsyncMock(return_value=False)),
+            patch.object(chats_router, 'publish_event', new=AsyncMock()),
+            patch.object(chats_router, 'notify_chat_deleted', new=AsyncMock()),
+            patch.object(chats_router.Feedbacks, 'purge_feedbacks_by_chat_ids', new=AsyncMock()) as mock_purge,
+        ):
+            result = await chats_router.delete_chat_by_id(request=_request(), id='chat-1', user=user, db=MagicMock())
+
+        assert result is False
+        mock_purge.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_purge_runs_before_the_ragnarok_notification(self):
+        user = SimpleNamespace(id='owner-1', role='user')
+        chat = _chat(id='chat-1', user_id='owner-1')
+        call_order = []
+
+        async def _purge(*args, **kwargs):
+            call_order.append('purge')
+            return 1
+
+        async def _notify(*args, **kwargs):
+            call_order.append('notify')
+
+        with (
+            patch.object(chats_router, 'stop_item_tasks', new=AsyncMock()),
+            patch.object(chats_router, 'has_permission', new=AsyncMock(return_value=True)),
+            patch.object(chats_router.Config, 'get', new=AsyncMock(return_value={})),
+            patch.object(chats_router.Chats, 'get_chat_by_id_and_user_id', new=AsyncMock(return_value=chat)),
+            patch.object(chats_router.Chats, 'delete_orphan_tags_for_user', new=AsyncMock()),
+            patch.object(chats_router.Chats, 'get_internal_chat_ids_by_parent_id', new=AsyncMock(return_value=[])),
+            patch.object(chats_router.Chats, 'delete_chat_by_id_and_user_id', new=AsyncMock(return_value=True)),
+            patch.object(chats_router, 'publish_event', new=AsyncMock()),
+            patch.object(chats_router, 'notify_chat_deleted', new=_notify),
+            patch.object(chats_router.Feedbacks, 'purge_feedbacks_by_chat_ids', new=_purge),
+        ):
+            await chats_router.delete_chat_by_id(request=_request(), id='chat-1', user=user, db=MagicMock())
+
+        assert call_order == ['purge', 'notify']
+
+
+class TestFeedbackPurgeOnDeleteAllChats:
+    @pytest.mark.asyncio
+    async def test_purges_the_calling_users_feedback(self):
+        user = SimpleNamespace(id='user-1', role='user')
+
+        with (
+            patch.object(chats_router, 'has_permission', new=AsyncMock(return_value=True)),
+            patch.object(chats_router.Config, 'get', new=AsyncMock(return_value={})),
+            patch.object(chats_router.Chats, 'delete_chats_by_user_id', new=AsyncMock(return_value=True)),
+            patch.object(chats_router, 'publish_event', new=AsyncMock()),
+            patch.object(chats_router, 'notify_user_chats_deleted', new=AsyncMock()),
+            patch.object(chats_router.Feedbacks, 'purge_feedbacks_by_user_id', new=AsyncMock()) as mock_purge,
+        ):
+            result = await chats_router.delete_all_user_chats(request=_request(), user=user, db=MagicMock())
+
+        assert result is True
+        assert mock_purge.await_args.args == ('user-1',)
+
+    @pytest.mark.asyncio
+    async def test_failed_delete_purges_nothing(self):
+        user = SimpleNamespace(id='user-1', role='user')
+
+        with (
+            patch.object(chats_router, 'has_permission', new=AsyncMock(return_value=True)),
+            patch.object(chats_router.Config, 'get', new=AsyncMock(return_value={})),
+            patch.object(chats_router.Chats, 'delete_chats_by_user_id', new=AsyncMock(return_value=False)),
+            patch.object(chats_router, 'publish_event', new=AsyncMock()),
+            patch.object(chats_router, 'notify_user_chats_deleted', new=AsyncMock()),
+            patch.object(chats_router.Feedbacks, 'purge_feedbacks_by_user_id', new=AsyncMock()) as mock_purge,
+        ):
+            result = await chats_router.delete_all_user_chats(request=_request(), user=user, db=MagicMock())
+
+        assert result is False
+        mock_purge.assert_not_awaited()
