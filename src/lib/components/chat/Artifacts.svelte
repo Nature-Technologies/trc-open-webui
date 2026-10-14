@@ -14,12 +14,11 @@
 		artifactContents
 	} from '$lib/stores';
 	import { copyToClipboard, createMessagesList } from '$lib/utils';
-	import { injectCsp } from '$lib/utils/csp';
+	import { injectCsp, svgArtifactDocument } from '$lib/utils/csp';
 
 	import XMark from '../icons/XMark.svelte';
 	import ArrowsPointingOut from '../icons/ArrowsPointingOut.svelte';
 	import Tooltip from '../common/Tooltip.svelte';
-	import SvgPanZoom from '../common/SVGPanZoom.svelte';
 	import ArrowLeft from '../icons/ArrowLeft.svelte';
 	import Download from '../icons/Download.svelte';
 
@@ -262,10 +261,18 @@
 								on:load={iframeLoadHandler}
 							></iframe>
 						{:else if contents[selectedContentIdx].type === 'svg'}
-							<SvgPanZoom
-								className=" w-full h-full max-h-full overflow-hidden"
-								svg={contents[selectedContentIdx].content}
-							/>
+							<!-- TRC: an SVG artifact is model-written markup. Injected into the page it would load
+							     its <image href> and style url() outside every CSP, so it is framed instead: behind
+							     the CSP meta and with an empty (everything denied) sandbox. -->
+							<iframe
+								title="Content"
+								srcdoc={svgArtifactDocument(
+									contents[selectedContentIdx].content,
+									$config?.ui?.iframe_csp ?? ''
+								)}
+								class="w-full border-0 h-full rounded-none"
+								sandbox=""
+							></iframe>
 						{/if}
 					</div>
 				{:else}

