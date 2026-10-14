@@ -105,7 +105,16 @@ services:
       # Memories and notes are put in front of the model as plain text that the
       # redaction filter never sees, so it never masks them.
       ENABLE_MEMORIES: "false"
+      # ENABLE_MEMORIES alone does not stop memories reaching the model: the
+      # system-context injection has its own switch (and a per-browser flag that
+      # defaults on), and the memory tools are gated by a permission.
+      ENABLE_MEMORY_SYSTEM_CONTEXT: "false"
+      USER_PERMISSIONS_FEATURES_MEMORIES: "false"
       ENABLE_NOTES: "false"
+      # A user-written system prompt (chat controls, settings, a folder's prompt) is
+      # plain text the filter never masks. This permission hides those fields for
+      # non-admin users; it is not enforced server-side and admins always see them.
+      USER_PERMISSIONS_CHAT_SYSTEM_PROMPT: "false"
       # The code interpreter and a code block's Run button execute model-written
       # code in the browser (Pyodide, with network access) beside restored data.
       # Unrelated to Hermes's own execute_code tool, which runs server-side.

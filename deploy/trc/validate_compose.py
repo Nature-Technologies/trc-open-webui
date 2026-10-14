@@ -52,6 +52,18 @@ EXPECTED_HERMES_BASE_URL = 'http://hermes-agent:8642/v1'
 EXPECTED_DISABLED_FEATURES = {
     'ENABLE_COMMUNITY_SHARING': 'one click posts a whole client chat to openwebui.com',
     'ENABLE_MEMORIES': 'memories reach the model as plain text the filter never masks',
+    'ENABLE_MEMORY_SYSTEM_CONTEXT': (
+        "this, not ENABLE_MEMORIES, gates putting a user's memories into the model's system context, "
+        'as plain text the filter never masks'
+    ),
+    'USER_PERMISSIONS_FEATURES_MEMORIES': (
+        'this permission, not ENABLE_MEMORIES, gates the memory tools that read and write memories '
+        'the filter never masks'
+    ),
+    'USER_PERMISSIONS_CHAT_SYSTEM_PROMPT': (
+        'a user-written system prompt (chat controls, settings, folder prompts) reaches the model '
+        'as plain text the filter never masks; the permission hides those fields for non-admins'
+    ),
     'ENABLE_NOTES': 'notes reach the model as plain text the filter never masks',
     'ENABLE_CODE_INTERPRETER': 'the interpreter runs model-written code in the browser beside restored data',
     'ENABLE_CODE_EXECUTION': "a code block's Run button executes model-written code in the browser",
