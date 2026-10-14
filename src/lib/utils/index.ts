@@ -1956,7 +1956,10 @@ export const initMermaid = async () => {
 	mermaid.initialize({
 		startOnLoad: false, // Should be false when using render API
 		theme: document.documentElement.classList.contains('dark') ? 'dark' : 'default',
-		securityLevel: 'loose',
+		// 'strict' (Mermaid's own default): HTML in labels is encoded and click callbacks
+		// are off. Chat diagrams are model output over restored client data, so 'loose' let
+		// a prompt-injected document turn one into a script or a link (spec §12.3).
+		securityLevel: 'strict',
 		htmlLabels: false
 	});
 	return mermaid;
@@ -1972,8 +1975,9 @@ const cleanupMermaidTempElements = (id: string) => {
 	document.getElementById(`i${id}`)?.remove();
 };
 
-// Mermaid runs with securityLevel:'loose', which emits unsanitized SVG (raw javascript: hrefs,
-// HTML labels); strip active content before it reaches any innerHTML/{@html} sink.
+// Mermaid runs at securityLevel 'strict' (initMermaid): HTML in labels is encoded and click
+// callbacks are off. Its SVG still goes into innerHTML/{@html} sinks, so active content is
+// stripped here as well.
 export const sanitizeSvg = (svg: string): string =>
 	DOMPurify.sanitize(svg, {
 		USE_PROFILES: { svg: true, svgFilters: true },
