@@ -26,6 +26,13 @@ describe('initMermaid', () => {
 		expect(initialize.mock.calls[0][0].securityLevel).toBe('strict');
 	});
 
+	it('stops a diagram directive setting the keys that can carry a remote url()', async () => {
+		await initMermaid();
+		expect(initialize.mock.calls[0][0].secure).toEqual(
+			expect.arrayContaining(['themeCSS', 'fontFamily', 'altFontFamily', 'themeVariables'])
+		);
+	});
+
 	it('keeps render-API mode and plain-text labels', async () => {
 		await initMermaid();
 		expect(initialize.mock.calls[0][0]).toMatchObject({ startOnLoad: false, htmlLabels: false });

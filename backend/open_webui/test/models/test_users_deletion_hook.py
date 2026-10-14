@@ -8,6 +8,7 @@ open_webui.models.users -- the local `from X import Y` re-resolves X.Y at
 call time, so patching X.Y beforehand is what actually takes effect.
 """
 
+from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -126,54 +127,98 @@ class TestDeleteUserById:
 
 
 class TestDeleteUserPurgesFeedback:
-    """Deleting a user removes every rating they gave: each one holds a full, unmasked
-    snapshot of one of the chats deleted with them."""
+    """Deleting a user removes every chat they own. Each rating of those chats -- the user's
+    own AND anyone else's (a reader with access can rate a shared chat) -- holds a full,
+    unmasked snapshot of one of them, so both are purged: by chat id and by rater."""
 
-    @pytest.mark.asyncio
-    async def test_purges_the_users_feedback_after_deletion(self):
-        session = _fake_db_session()
-
-        with (
+    @staticmethod
+    def _patches(session, *, delete_result=True, chat_ids=('chat-a', 'chat-b'), purge_by_chat=None, purge_by_user=None):
+        return (
             patch('open_webui.models.groups.Groups.remove_user_from_all_groups', new=AsyncMock()),
-            patch('open_webui.models.chats.Chats.delete_chats_by_user_id', new=AsyncMock(return_value=True)),
+            patch('open_webui.models.chats.Chats.get_chat_ids_by_user_id', new=AsyncMock(return_value=list(chat_ids))),
+            patch('open_webui.models.chats.Chats.delete_chats_by_user_id', new=AsyncMock(return_value=delete_result)),
             patch('open_webui.utils.ragnarok.notify_user_chats_deleted', new=AsyncMock()),
-            patch('open_webui.models.feedbacks.Feedbacks.purge_feedbacks_by_user_id', new=AsyncMock()) as mock_purge,
+            patch(
+                'open_webui.models.feedbacks.Feedbacks.purge_feedbacks_by_chat_ids',
+                new=purge_by_chat or AsyncMock(),
+            ),
+            patch(
+                'open_webui.models.feedbacks.Feedbacks.purge_feedbacks_by_user_id',
+                new=purge_by_user or AsyncMock(),
+            ),
             patch(
                 'open_webui.models.users.get_async_db_context',
                 return_value=_FakeSessionContext(session),
             ),
-        ):
+        )
+
+    @pytest.mark.asyncio
+    async def test_purges_by_the_deleted_chat_ids_and_by_the_user(self):
+        by_chat, by_user = AsyncMock(), AsyncMock()
+
+        with ExitStack() as stack:
+            for p in self._patches(_fake_db_session(), purge_by_chat=by_chat, purge_by_user=by_user):
+                stack.enter_context(p)
             result = await Users.delete_user_by_id('user-1')
 
         assert result is True
-        assert mock_purge.await_args.args == ('user-1',)
+        assert by_chat.await_args.args == (['chat-a', 'chat-b'],)
+        assert by_user.await_args.args == ('user-1',)
 
     @pytest.mark.asyncio
     async def test_purges_nothing_when_chat_deletion_fails(self):
-        session = _fake_db_session()
+        by_chat, by_user = AsyncMock(), AsyncMock()
 
-        with (
-            patch('open_webui.models.groups.Groups.remove_user_from_all_groups', new=AsyncMock()),
-            patch('open_webui.models.chats.Chats.delete_chats_by_user_id', new=AsyncMock(return_value=False)),
-            patch('open_webui.utils.ragnarok.notify_user_chats_deleted', new=AsyncMock()),
-            patch('open_webui.models.feedbacks.Feedbacks.purge_feedbacks_by_user_id', new=AsyncMock()) as mock_purge,
-            patch(
-                'open_webui.models.users.get_async_db_context',
-                return_value=_FakeSessionContext(session),
-            ),
-        ):
+        with ExitStack() as stack:
+            for p in self._patches(
+                _fake_db_session(), delete_result=False, purge_by_chat=by_chat, purge_by_user=by_user
+            ):
+                stack.enter_context(p)
             result = await Users.delete_user_by_id('user-1')
 
         assert result is False
-        mock_purge.assert_not_awaited()
+        by_chat.assert_not_awaited()
+        by_user.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_purge_runs_after_the_session_is_released_and_before_the_notification(self):
+    async def test_ids_are_collected_before_the_chats_are_deleted(self):
+        call_order = []
+
+        async def _list(*args, **kwargs):
+            call_order.append('list')
+            return ['chat-a']
+
+        async def _delete(*args, **kwargs):
+            call_order.append('delete')
+            return True
+
+        with (
+            patch('open_webui.models.groups.Groups.remove_user_from_all_groups', new=AsyncMock()),
+            patch('open_webui.models.chats.Chats.get_chat_ids_by_user_id', new=_list),
+            patch('open_webui.models.chats.Chats.delete_chats_by_user_id', new=_delete),
+            patch('open_webui.utils.ragnarok.notify_user_chats_deleted', new=AsyncMock()),
+            patch('open_webui.models.feedbacks.Feedbacks.purge_feedbacks_by_chat_ids', new=AsyncMock()),
+            patch('open_webui.models.feedbacks.Feedbacks.purge_feedbacks_by_user_id', new=AsyncMock()),
+            patch(
+                'open_webui.models.users.get_async_db_context',
+                return_value=_FakeSessionContext(_fake_db_session()),
+            ),
+        ):
+            await Users.delete_user_by_id('user-1')
+
+        assert call_order == ['list', 'delete']
+
+    @pytest.mark.asyncio
+    async def test_purges_run_after_the_session_is_released_and_before_the_notification(self):
         call_order = []
         session = _fake_db_session()
 
-        async def _purge(user_id, *args, **kwargs):
-            call_order.append('purge')
+        async def _purge_chats(chat_ids, *args, **kwargs):
+            call_order.append('purge_chats')
+            return 0
+
+        async def _purge_user(user_id, *args, **kwargs):
+            call_order.append('purge_user')
             return 0
 
         async def _notify(user_id):
@@ -181,9 +226,11 @@ class TestDeleteUserPurgesFeedback:
 
         with (
             patch('open_webui.models.groups.Groups.remove_user_from_all_groups', new=AsyncMock()),
+            patch('open_webui.models.chats.Chats.get_chat_ids_by_user_id', new=AsyncMock(return_value=['chat-a'])),
             patch('open_webui.models.chats.Chats.delete_chats_by_user_id', new=AsyncMock(return_value=True)),
             patch('open_webui.utils.ragnarok.notify_user_chats_deleted', new=_notify),
-            patch('open_webui.models.feedbacks.Feedbacks.purge_feedbacks_by_user_id', new=_purge),
+            patch('open_webui.models.feedbacks.Feedbacks.purge_feedbacks_by_chat_ids', new=_purge_chats),
+            patch('open_webui.models.feedbacks.Feedbacks.purge_feedbacks_by_user_id', new=_purge_user),
             patch(
                 'open_webui.models.users.get_async_db_context',
                 return_value=_FakeSessionContext(session, call_order),
@@ -191,4 +238,4 @@ class TestDeleteUserPurgesFeedback:
         ):
             await Users.delete_user_by_id('user-1')
 
-        assert call_order == ['session_released', 'purge', 'notify']
+        assert call_order == ['session_released', 'purge_chats', 'purge_user', 'notify']

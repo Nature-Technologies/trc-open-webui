@@ -1960,7 +1960,23 @@ export const initMermaid = async () => {
 		// are off. Chat diagrams are model output over restored client data, so 'loose' let
 		// a prompt-injected document turn one into a script or a link (spec §12.3).
 		securityLevel: 'strict',
-		htmlLabels: false
+		htmlLabels: false,
+		// Keys a %%{init}%% directive inside a diagram may not set. Mermaid's own list (the
+		// first six) is kept; themeCSS and the font keys are added because a url() in them
+		// survives its sanitizer and the <style> it lands in survives ours, so a
+		// prompt-injected diagram could otherwise make the browser fetch a remote URL.
+		secure: [
+			'secure',
+			'securityLevel',
+			'startOnLoad',
+			'maxTextSize',
+			'suppressErrorRendering',
+			'maxEdges',
+			'themeCSS',
+			'fontFamily',
+			'altFontFamily',
+			'themeVariables'
+		]
 	});
 	return mermaid;
 };
@@ -1978,8 +1994,10 @@ const cleanupMermaidTempElements = (id: string) => {
 // Mermaid runs at securityLevel 'strict' (initMermaid), which encodes HTML in labels and
 // turns click callbacks off, but still emits <a xlink:href="https://…"> for `click X href`
 // and <image xlink:href> for icons. Mermaid SVG is rendered into the page, so every href is
-// dropped here whatever its value: a diagram can neither link out nor load anything.
-// DOMPurify's FORBID_ATTR always wins over ADD_ATTR.
+// dropped here whatever its value: a diagram carries no link and no image href.
+// DOMPurify's FORBID_ATTR always wins over ADD_ATTR. This is not a claim that nothing remote
+// can load: <style> is allowed above, and what keeps a remote url() out of it is initMermaid's
+// `secure` list, which stops an init directive setting themeCSS or the font keys.
 export const sanitizeSvg = (svg: string): string =>
 	DOMPurify.sanitize(svg, {
 		USE_PROFILES: { svg: true, svgFilters: true },

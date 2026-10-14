@@ -58,8 +58,11 @@ EXPECTED_DISABLED_FEATURES = {
     'ENABLE_EVALUATION_ARENA_MODELS': 'the arena registers a model the TRC filter may not be attached to',
 }
 # Injected as a <meta> CSP into every srcdoc iframe (HTML artifacts, embeds, file and
-# citation previews). HTML artifacts cannot be disabled by env, so this is the control:
-# no script, no network, no form post, no <base>; inline styles and data:/blob: media only.
+# citation previews). HTML artifacts cannot be disabled by env, so this CSP is what limits
+# them: no script, no fetch/XHR, no external image, font, media or stylesheet, no nested
+# frame, no form post, no <base>; inline styles and data:/blob: media only. A CSP cannot
+# stop a navigation (a meta refresh, a link click), so the fork also drops allow-scripts
+# from the artifact iframe's sandbox (Artifacts.svelte); this check cannot see that.
 EXPECTED_IFRAME_CSP = (
     "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; "
     "font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'"
@@ -182,9 +185,10 @@ def check_hardening_env(env: dict) -> None:
         )
     check(
         env.get('IFRAME_CSP') == EXPECTED_IFRAME_CSP,
-        f'IFRAME_CSP must be {EXPECTED_IFRAME_CSP!r} -- HTML artifacts auto-open with '
-        'scripts and cannot be disabled by env, so this CSP is what keeps them off the '
-        f'network; got {env.get("IFRAME_CSP")!r}',
+        f'IFRAME_CSP must be {EXPECTED_IFRAME_CSP!r} -- HTML artifacts auto-open and '
+        'cannot be disabled by env, so this CSP is what blocks their scripts, fetches '
+        'and external subresources. It cannot block a navigation; the artifact '
+        f'iframe sandbox omits allow-scripts for that. Got {env.get("IFRAME_CSP")!r}',
     )
 
 

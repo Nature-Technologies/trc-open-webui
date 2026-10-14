@@ -739,6 +739,13 @@ async def delete_folder_by_id(
                     detail=ERROR_MESSAGES.DEFAULT('Error deleting folder'),
                 )
             finally:
+                # Whatever happened above -- success, an error, a cancelled request -- purge the
+                # feedback snapshots of every chat already deleted: a snapshot is a full, unmasked
+                # copy of the chat it rates, and an exception after the chats are gone would
+                # otherwise skip the purge and strand it. Local and never-raising. It opens its
+                # own session (no `db`): after a failed statement the request session may not be
+                # usable. Idempotent, so it is harmless if this loop ever really iterates.
+                await Feedbacks.purge_feedbacks_by_chat_ids(deleted_chat_ids)
                 # Get all subfolders
                 subfolders = await Folders.get_folders_by_parent_id_and_user_id(folder.id, folder_owner_id, db=db)
                 folders.extend(subfolders)
@@ -752,11 +759,8 @@ async def delete_folder_by_id(
     # Last, and under a single overall budget rather than a per-call one:
     # every chat and folder row is already committed and every grant already
     # revoked, so a slow, unreachable or cancelled RAGnarok can now only cost
-    # this request time it has bounded -- it can no longer skip anything.
-    #
-    # The feedback purge goes first: it is local and never raises, and a feedback row's
-    # snapshot is a full, unmasked copy of the chat it rates, so a cancelled or stalled
-    # RAGnarok call must not be able to leave one behind.
-    await Feedbacks.purge_feedbacks_by_chat_ids(deleted_chat_ids, db=db)
+    # this request time it has bounded -- it can no longer skip anything. (The feedback
+    # purge for these chats already ran in the loop's `finally`, ahead of this remote call
+    # and whether or not the loop succeeded.)
     await notify_chats_deleted(folder_owner_id, deleted_chat_ids)
     return True

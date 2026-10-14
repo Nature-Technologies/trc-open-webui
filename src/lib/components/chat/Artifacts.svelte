@@ -243,6 +243,9 @@
 				{#if contents.length > 0}
 					<div class="max-w-full w-full h-full">
 						{#if contents[selectedContentIdx].type === 'iframe'}
+							<!-- TRC: no allow-scripts. A model-written HTML block auto-opens here, and the CSP
+							     meta cannot stop a navigation: without allow-scripts the browser refuses a
+							     <meta http-equiv="refresh"> redirect to an attacker URL (and every script). -->
 							<iframe
 								bind:this={iframeElement}
 								title="Content"
@@ -251,7 +254,7 @@
 									$config?.ui?.iframe_csp ?? ''
 								)}
 								class="w-full border-0 h-full rounded-none"
-								sandbox="allow-scripts allow-downloads{($settings?.iframeSandboxAllowForms ?? false)
+								sandbox="allow-downloads{($settings?.iframeSandboxAllowForms ?? false)
 									? ' allow-forms'
 									: ''}{($settings?.iframeSandboxAllowSameOrigin ?? false)
 									? ' allow-same-origin'

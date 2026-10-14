@@ -2309,6 +2309,22 @@ class ChatTable:
         except Exception:
             return False
 
+    async def get_chat_ids_by_user_id(self, user_id: str, db: AsyncSession | None = None) -> list[str]:
+        """List every chat id user_id owns, with no pinned/archived/folder/limit filtering.
+
+        Mirrors the selection delete_chats_by_user_id removes, so a caller can learn
+        beforehand which chats a delete-all or a user delete is about to destroy and then
+        purge what other people attached to them (feedback snapshots). Fails safe like the
+        folder sibling below: an empty list costs that extra purge only, never the delete.
+        """
+        try:
+            async with get_async_db_context(db) as session:
+                result = await session.execute(select(Chat.id).filter_by(user_id=user_id))
+                return [row[0] for row in result.all()]
+        except Exception as e:
+            log.error(f'Listing chat ids for a bulk delete failed: {type(e).__name__}')
+            return []
+
     async def get_chat_ids_by_user_id_and_folder_id(
         self, user_id: str, folder_id: str, db: AsyncSession | None = None
     ) -> list[str]:

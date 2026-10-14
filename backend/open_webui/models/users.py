@@ -694,15 +694,20 @@ class UsersTable:
 
         # Delete User Chats
         async with get_async_db_context(db) as session:
+            # Listed first: once the chats are gone there is nothing left to list.
+            chat_ids = await Chats.get_chat_ids_by_user_id(id, db=session)
             deleted_chats = await Chats.delete_chats_by_user_id(id, db=session)
             if not deleted_chats:
                 return False  # chats deletion failed
             await session.execute(delete(User).where(User.id == id))
             await session.commit()
 
-        # Every rating the user gave holds a full, unmasked snapshot of one of the chats
-        # just deleted. Local and never-raising; outside the session block for the same
-        # reason as the notification, and before it so a slow RAGnarok cannot delay it.
+        # A feedback row holds a full, unmasked snapshot of the chat it rates. Purge what
+        # anyone left on the chats just deleted (a reader with access can rate a shared
+        # chat), and every rating this user gave. Local and never-raising; outside the
+        # session block for the same reason as the notification, and before it so a slow
+        # RAGnarok cannot delay it.
+        await Feedbacks.purge_feedbacks_by_chat_ids(chat_ids)
         await Feedbacks.purge_feedbacks_by_user_id(id)
 
         # Deliberately outside the session block: this is a remote HTTP call,
