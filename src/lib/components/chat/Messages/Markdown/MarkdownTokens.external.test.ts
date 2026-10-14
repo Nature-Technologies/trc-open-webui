@@ -23,6 +23,10 @@ const html = (md: string) =>
 describe('images in a message', () => {
 	// What the image component and the origin check read from the browser.
 	beforeEach(() => {
+		// Svelte warns that the image component's <div> sits inside the markdown <p>; that is
+		// upstream's markup, not what is under test.
+		vi.spyOn(console, 'warn').mockImplementation(() => {});
+		vi.spyOn(console, 'error').mockImplementation(() => {});
 		vi.stubGlobal('window', {
 			location: { origin: 'https://app.example' },
 			addEventListener: () => {},
@@ -32,6 +36,7 @@ describe('images in a message', () => {
 	});
 	afterEach(() => {
 		vi.unstubAllGlobals();
+		vi.restoreAllMocks();
 	});
 
 	it.each([
