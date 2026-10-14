@@ -79,6 +79,23 @@ EXPECTED_IFRAME_CSP = (
     "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; "
     "font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'"
 )
+# The site-wide Content-Security-Policy header (backend/open_webui/utils/security_headers.py
+# reads CONTENT_SECURITY_POLICY). Every client answer passes through the browser, and a
+# model-written URL is a request the browser makes on its own, carrying whatever the model
+# put in it to a host the model chose. This policy blocks every load from a third party:
+# images, media, frames, fonts, stylesheets, scripts and fetch/XHR/WebSocket/beacon, with
+# 'self' (plus data:/blob:) as the only source. It also reaches the srcdoc iframes (artifacts,
+# previews), which inherit it on top of their own IFRAME_CSP. Measured in a real browser
+# against the built app: 'unsafe-inline' for scripts is SvelteKit's inline bootstrap in
+# index.html, and 'unsafe-eval' is vega's expression compiler (a vega-lite chart fails to
+# render without it). Not set on purpose: frame-ancestors (who may embed the app is a
+# deployment decision). A CSP cannot block a navigation, so links stay as they are.
+EXPECTED_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+    "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; "
+    "font-src 'self' data:; connect-src 'self'; frame-src 'self' blob:; worker-src 'self' blob:; "
+    "object-src 'none'; base-uri 'self'; form-action 'self'"
+)
 
 # The new-chat starter prompts (spec section 12.2). Open WebUI falls back to its generic
 # six ("Tell me a fun fact about the Roman Empire") when the JSON is invalid or the list
@@ -201,6 +218,13 @@ def check_hardening_env(env: dict) -> None:
         'cannot be disabled by env, so this CSP is what blocks their scripts, fetches '
         'and external subresources. It cannot block a navigation; the artifact '
         f'iframe sandbox omits allow-scripts for that. Got {env.get("IFRAME_CSP")!r}',
+    )
+    check(
+        env.get('CONTENT_SECURITY_POLICY') == EXPECTED_CONTENT_SECURITY_POLICY,
+        f'CONTENT_SECURITY_POLICY must be {EXPECTED_CONTENT_SECURITY_POLICY!r} -- it is the one '
+        'layer that stops the browser fetching a model-chosen third-party URL (image, media, '
+        'frame, font, stylesheet, script, fetch, WebSocket) from anywhere in the app, and the '
+        f'srcdoc iframes inherit it. Got {env.get("CONTENT_SECURITY_POLICY")!r}',
     )
 
 

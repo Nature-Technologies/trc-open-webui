@@ -133,6 +133,17 @@ services:
       # so the fork's artifact iframe also drops allow-scripts from its sandbox
       # (Artifacts.svelte): the browser then refuses a meta-refresh redirect.
       IFRAME_CSP: "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'"
+      # The site-wide Content-Security-Policy header. A URL in a model answer is a
+      # request the browser makes on its own, to a host the model chose; this blocks
+      # every third-party load (image, media, frame, font, stylesheet, script, fetch,
+      # XHR, WebSocket, beacon) from anywhere in the app, and the srcdoc iframes
+      # (artifacts, previews) inherit it on top of IFRAME_CSP. 'self', data: and blob:
+      # are the only sources. Measured against the built app in a real browser:
+      # 'unsafe-inline' scripts are SvelteKit's inline bootstrap, and 'unsafe-eval' is
+      # vega's expression compiler (vega-lite charts need it). The Google Fonts
+      # stylesheet in app.html is blocked, so the UI falls back to its system fonts.
+      # frame-ancestors is left unset on purpose. validate_compose.py pins this value.
+      CONTENT_SECURITY_POLICY: "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
       # The new-chat starter prompts (spec section 12.2), replacing upstream's
       # generic six. A JSON list of {"title": [line 1, line 2], "content": prompt};
       # choosing one sends its content at once. Invalid JSON or an empty list
