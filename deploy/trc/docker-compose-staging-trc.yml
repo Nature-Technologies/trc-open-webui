@@ -94,6 +94,33 @@ services:
       ENABLE_SEARCH_QUERY_GENERATION: "false"
       ENABLE_RETRIEVAL_QUERY_GENERATION: "false"
       ENABLE_IMAGE_PROMPT_GENERATION: "false"
+      # Staging hardening (answer-first spec section 12.3, 2026-10-14). Each switch
+      # below is ON by default upstream, and each is a way for restored, unmasked
+      # client data to leave the trust boundary or to reach the model without
+      # passing the redaction filter. With ENABLE_PERSISTENT_CONFIG "False" this
+      # file is their only source; validate_compose.py pins every one.
+      #
+      # "Share to Community": one click posts a whole client chat to openwebui.com.
+      ENABLE_COMMUNITY_SHARING: "false"
+      # Memories and notes are put in front of the model as plain text that the
+      # redaction filter never sees, so it never masks them.
+      ENABLE_MEMORIES: "false"
+      ENABLE_NOTES: "false"
+      # The code interpreter and a code block's Run button execute model-written
+      # code in the browser (Pyodide, with network access) beside restored data.
+      # Unrelated to Hermes's own execute_code tool, which runs server-side.
+      ENABLE_CODE_INTERPRETER: "false"
+      ENABLE_CODE_EXECUTION: "false"
+      # The arena registers its own model, which the TRC filter may not cover.
+      ENABLE_EVALUATION_ARENA_MODELS: "false"
+      # A CSP <meta> Open WebUI injects into every srcdoc iframe it builds: HTML
+      # artifacts, embeds, HTML file and citation previews. HTML artifacts cannot
+      # be turned off by env (`detectArtifacts` is a per-user browser setting that
+      # defaults to on), so this is the control. No script, no fetch, no external
+      # image, font or stylesheet, no form post, no <base> rewrite; inline styles
+      # and data:/blob: images still render, so a static artifact still looks
+      # right. Script-driven embeds stop working; TRC uses none.
+      IFRAME_CSP: "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'"
       WEBUI_AUTH: "true"
       # API keys (sk-...). Enable them so an admin can mint the key trc-backend's
       # integrations authenticate with (OPENWEBUI_ADMIN_KEY): the retention

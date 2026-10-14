@@ -43,6 +43,27 @@ EXPECTED_SERVICE_NETWORKS = {'open-webui': {'poc-net', 'trc-shared'}}
 # container name over poc-net.
 EXPECTED_HERMES_BASE_URL = 'http://hermes-agent:8642/v1'
 
+# Staging hardening (answer-first spec section 12.3). Every one of these is ON by default
+# upstream, and each is a way for restored, unmasked client data to leave the trust
+# boundary or to reach the model without passing the redaction filter. With
+# ENABLE_PERSISTENT_CONFIG "False" the compose env is the only source, so a deleted line
+# silently turns the feature back on; the value is the reason, quoted in the failure.
+EXPECTED_DISABLED_FEATURES = {
+    'ENABLE_COMMUNITY_SHARING': 'one click posts a whole client chat to openwebui.com',
+    'ENABLE_MEMORIES': 'memories reach the model as plain text the filter never masks',
+    'ENABLE_NOTES': 'notes reach the model as plain text the filter never masks',
+    'ENABLE_CODE_INTERPRETER': 'the interpreter runs model-written code in the browser beside restored data',
+    'ENABLE_CODE_EXECUTION': "a code block's Run button executes model-written code in the browser",
+    'ENABLE_EVALUATION_ARENA_MODELS': 'the arena registers a model the TRC filter may not be attached to',
+}
+# Injected as a <meta> CSP into every srcdoc iframe (HTML artifacts, embeds, file and
+# citation previews). HTML artifacts cannot be disabled by env, so this is the control:
+# no script, no network, no form post, no <base>; inline styles and data:/blob: media only.
+EXPECTED_IFRAME_CSP = (
+    "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; "
+    "font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'"
+)
+
 # The TRC build files. `deploy/trc/Dockerfile` is a COPY of the repository-root
 # Dockerfile plus the TRC deltas, kept out of the root so that a fork sync from
 # open-webui/open-webui never conflicts there. That trade is only safe because
@@ -139,6 +160,23 @@ def check_env_example_declares_every_reference() -> None:
         f'compose references {missing} but .env.staging.example does not declare '
         'them -- a plain ${VAR} omission would otherwise default to a blank '
         'string with only a warning from `docker compose config`',
+    )
+
+
+def check_hardening_env(env: dict) -> None:
+    """Assert the staging hardening switches (spec section 12.3) are set and off."""
+    for key, why in EXPECTED_DISABLED_FEATURES.items():
+        value = env.get(key)
+        check(
+            str(value).strip().lower() == 'false',
+            f'{key} must be "false" -- {why}. Got {value!r}; with ENABLE_PERSISTENT_CONFIG '
+            '"False" a missing line restores the upstream default, which is on',
+        )
+    check(
+        env.get('IFRAME_CSP') == EXPECTED_IFRAME_CSP,
+        f'IFRAME_CSP must be {EXPECTED_IFRAME_CSP!r} -- HTML artifacts auto-open with '
+        'scripts and cannot be disabled by env, so this CSP is what keeps them off the '
+        f'network; got {env.get("IFRAME_CSP")!r}',
     )
 
 
@@ -1158,6 +1196,7 @@ def main() -> int:
         'OPENAI_API_BASE_URL/OPENAI_API_KEY and chat stays broken after a '
         'recreate',
     )
+    check_hardening_env(env)
 
     check_env_example_declares_every_reference()
     check_compose_renders()
