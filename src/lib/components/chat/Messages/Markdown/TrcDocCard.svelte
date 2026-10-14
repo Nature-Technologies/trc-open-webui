@@ -6,6 +6,8 @@
 	// the viewer panel when the user presses Open. The card is deliberately quiet: it belongs
 	// to the message, and its one distinctive element is a content-free glyph of the
 	// document's shape (a ruled table for a list, a page for a report).
+	// An expired card offers Regenerate (contract C4): the same id is rebuilt in place, with
+	// no model turn. Every decision about that lives in $lib/utils/trc-doc-regenerate.
 	import { onDestroy, onMount } from 'svelte';
 	import {
 		chatId,
@@ -17,12 +19,24 @@
 		showTrcDoc,
 		trcDoc
 	} from '$lib/stores';
+	import { getTrcDocMeta, regenerateTrcDoc } from '$lib/apis/trc';
 	import {
 		autoOpenedTrcDocs,
 		expiryLabel,
 		parseTrcDocCard,
 		shouldAutoOpenTrcDoc
 	} from '$lib/utils/trc-doc';
+	import {
+		REGEN_POLL_MS,
+		canRegenerate,
+		initialRegenState,
+		isRegenBusy,
+		rebuiltTrcDocs,
+		regenStatus,
+		regenerateState,
+		type RegenEvent,
+		type RegenState
+	} from '$lib/utils/trc-doc-regenerate';
 
 	export let text: string;
 	export let done: boolean;
@@ -31,12 +45,26 @@
 
 	let now = new Date();
 	let timer: ReturnType<typeof setInterval> | undefined;
+	let pollTimer: ReturnType<typeof setTimeout> | undefined;
+	let destroyed = false;
 	onMount(() => {
 		timer = setInterval(() => (now = new Date()), 30_000);
 	});
 	onDestroy(() => {
+		destroyed = true;
 		if (timer) clearInterval(timer);
+		if (pollTimer) clearTimeout(pollTimer);
 	});
+
+	// The fence's own expiry never changes, so a rebuilt copy's fresh expiry is held here,
+	// and page-wide in rebuiltTrcDocs so a re-mounted card stays fresh.
+	let regen: RegenState = initialRegenState();
+	let regenFor = '';
+	$: if (card && card.id !== regenFor) {
+		regenFor = card.id;
+		regen = initialRegenState(rebuiltTrcDocs.get(card.id) ?? null);
+	}
+	$: expiresAt = regen.expiresAt ?? card?.expires_at ?? null;
 
 	const plural = (n: number, one: string) => `${n.toLocaleString()} ${one}${n === 1 ? '' : 's'}`;
 
@@ -50,17 +78,46 @@
 			: card.pages === null
 				? null
 				: plural(card.pages, 'page');
-	$: expiry = card ? expiryLabel(card.expires_at, now) : null;
+	$: expiry = card ? expiryLabel(expiresAt, now) : null;
 	$: expired = expiry === 'Expired';
-	$: openLabel = `Open ${card?.kind === 'list' ? (card.title ?? 'list') : 'report'} in the viewer`;
+	$: statusLine = regenStatus(regen, expired);
+	$: docName = card?.kind === 'list' ? (card.title ?? 'list') : 'report';
+	$: openLabel = `Open ${docName} in the viewer`;
 
-	const open = () => {
+	const open = (fresh: string | null = expiresAt) => {
 		if (!card || !$chatId) return;
-		trcDoc.set({ ...card, chatId: $chatId });
+		trcDoc.set({ ...card, expires_at: fresh, chatId: $chatId });
 		showArtifacts.set(false);
 		showEmbeds.set(false);
 		showControls.set(true);
 		showTrcDoc.set(true);
+	};
+
+	// Feed one HTTP answer to the reducer, then do what the new state asks for.
+	const apply = (event: RegenEvent) => {
+		regen = regenerateState(regen, event);
+		if (pollTimer) clearTimeout(pollTimer);
+		if (regen.open && card && regen.expiresAt) {
+			rebuiltTrcDocs.set(card.id, regen.expiresAt);
+			const fresh = regen.expiresAt;
+			regen = regenerateState(regen, { type: 'opened' });
+			open(fresh);
+		}
+		if (regen.phase === 'reloading') pollMeta();
+		else if (regen.phase === 'rebuilding') pollTimer = setTimeout(pollMeta, REGEN_POLL_MS);
+	};
+
+	const pollMeta = async () => {
+		if (!card || !$chatId || destroyed) return;
+		const { status, body } = await getTrcDocMeta(localStorage.token, card, $chatId);
+		if (!destroyed) apply({ type: 'meta', status, body, now: Date.now() });
+	};
+
+	const regenerate = async () => {
+		if (!card || !$chatId || !canRegenerate(regen)) return;
+		apply({ type: 'start' });
+		const { status, body } = await regenerateTrcDoc(localStorage.token, card, $chatId);
+		if (!destroyed) apply({ type: 'regenerate', status, body, now: Date.now() });
 	};
 
 	// Open by itself once, the moment a just-issued card first appears — the way Open
@@ -150,13 +207,15 @@
 			<div class="truncate text-sm font-medium text-gray-900 dark:text-gray-100" title={heading}>
 				{heading}
 			</div>
-			{#if count || expiry}
+			{#if count || expiry || statusLine}
 				<div class="mt-0.5 flex flex-wrap gap-x-3 text-xs text-gray-500 dark:text-gray-400">
 					{#if count}
 						<span class="tabular-nums">{count}</span>
 					{/if}
-					{#if expired}
-						<span>Ask again to get a fresh copy.</span>
+					{#if statusLine}
+						<span role="status">{statusLine}</span>
+					{:else if expired}
+						<span>This copy has expired.</span>
 					{:else if expiry}
 						<span>{expiry}</span>
 					{/if}
@@ -164,7 +223,40 @@
 			{/if}
 		</div>
 
-		{#if expired}
+		{#if expired && canRegenerate(regen)}
+			<button
+				type="button"
+				aria-label={`Regenerate ${docName}`}
+				disabled={!$chatId}
+				on:click={regenerate}
+				class="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-blue-700 hover:shadow active:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none disabled:hover:bg-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-gray-900"
+			>
+				<svg
+					xmlns="http://www.w3.org/2000/svg"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					aria-hidden="true"
+					class="size-3.5 shrink-0"
+				>
+					<path d="M21 12a9 9 0 1 1-2.64-6.36" />
+					<path d="M21 3v6h-6" />
+				</svg>
+				Regenerate
+			</button>
+		{:else if expired && isRegenBusy(regen)}
+			<button
+				type="button"
+				disabled
+				aria-busy="true"
+				class="shrink-0 cursor-wait rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-500 dark:border-gray-700 dark:text-gray-400"
+			>
+				Rebuilding…
+			</button>
+		{:else if expired}
 			<button
 				type="button"
 				disabled
@@ -177,7 +269,7 @@
 				type="button"
 				aria-label={openLabel}
 				disabled={!$chatId}
-				on:click={open}
+				on:click={() => open()}
 				class="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-blue-700 hover:shadow active:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none disabled:hover:bg-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-gray-900"
 			>
 				<svg
