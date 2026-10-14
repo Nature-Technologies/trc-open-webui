@@ -13,6 +13,7 @@
 	import { copyToClipboard, unescapeHtml } from '$lib/utils';
 
 	import Image from '$lib/components/common/Image.svelte';
+	import { messageImageSrc } from '$lib/utils/safeImageUrl';
 	import KatexRenderer from './KatexRenderer.svelte';
 	import Source from './Source.svelte';
 	import HtmlToken from './HTMLToken.svelte';
@@ -108,7 +109,15 @@
 			>
 		{/if}
 	{:else if token.type === 'image'}
-		<Image src={token.href} alt={token.text} allowExternal={true} />
+		{@const imageSrc = messageImageSrc(token.href)}
+		{#if imageSrc}
+			<Image src={imageSrc} alt={token.text} allowExternal={true} />
+		{:else}
+			<!-- TRC: an image URL in a message is a request the browser makes by itself, to a host
+			     the model chose. Only this app's own, data: and blob: images load; the rest is
+			     shown as its alt text. -->
+			<span>{token.text || 'image'}</span>
+		{/if}
 	{:else if token.type === 'strong'}
 		<strong><svelte:self id={`${id}-strong`} tokens={token.tokens} {onSourceClick} /></strong>
 	{:else if token.type === 'em'}
