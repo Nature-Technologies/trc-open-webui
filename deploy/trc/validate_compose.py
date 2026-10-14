@@ -17,6 +17,7 @@ Run: python deploy/trc/validate_compose.py
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import subprocess
 import sys
@@ -63,6 +64,13 @@ EXPECTED_IFRAME_CSP = (
     "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; "
     "font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'"
 )
+
+# The new-chat starter prompts (spec section 12.2). Open WebUI falls back to its generic
+# six ("Tell me a fun fact about the Roman Empire") when the JSON is invalid or the list
+# is empty, and only logs it, so the shape is asserted here.
+PROMPT_SUGGESTIONS_MIN = 4
+PROMPT_SUGGESTIONS_MAX = 8
+PROMPT_SUGGESTION_MAX_CHARS = 200
 
 # The TRC build files. `deploy/trc/Dockerfile` is a COPY of the repository-root
 # Dockerfile plus the TRC deltas, kept out of the root so that a fork sync from
@@ -178,6 +186,37 @@ def check_hardening_env(env: dict) -> None:
         'scripts and cannot be disabled by env, so this CSP is what keeps them off the '
         f'network; got {env.get("IFRAME_CSP")!r}',
     )
+
+
+def check_prompt_suggestions(env: dict) -> None:
+    """Assert DEFAULT_PROMPT_SUGGESTIONS parses into the shape config.py expects.
+
+    `[{"title": [line_1, line_2], "content": prompt}, ...]`. Anything else silently
+    restores upstream's generic suggestions on the new-chat screen.
+    """
+    raw = env.get('DEFAULT_PROMPT_SUGGESTIONS')
+    try:
+        items = json.loads(raw) if isinstance(raw, str) else None
+    except ValueError:
+        items = None
+    check(
+        isinstance(items, list) and PROMPT_SUGGESTIONS_MIN <= len(items) <= PROMPT_SUGGESTIONS_MAX,
+        f'DEFAULT_PROMPT_SUGGESTIONS must be a JSON list of {PROMPT_SUGGESTIONS_MIN}-'
+        f'{PROMPT_SUGGESTIONS_MAX} suggestions -- invalid JSON or an empty list brings '
+        "back upstream's generic prompts with only a log line",
+    )
+    for i, item in enumerate(items if isinstance(items, list) else []):
+        title = item.get('title') if isinstance(item, dict) else None
+        content = item.get('content') if isinstance(item, dict) else None
+        check(
+            isinstance(title, list) and len(title) == 2 and all(isinstance(t, str) and t.strip() for t in title),
+            f'DEFAULT_PROMPT_SUGGESTIONS[{i}].title must be two non-empty strings, got {title!r}',
+        )
+        check(
+            isinstance(content, str) and bool(content.strip()) and len(content) <= PROMPT_SUGGESTION_MAX_CHARS,
+            f'DEFAULT_PROMPT_SUGGESTIONS[{i}].content must be a non-empty string of at most '
+            f'{PROMPT_SUGGESTION_MAX_CHARS} characters, got {content!r}',
+        )
 
 
 def check_compose_renders() -> None:
@@ -1197,6 +1236,7 @@ def main() -> int:
         'recreate',
     )
     check_hardening_env(env)
+    check_prompt_suggestions(env)
 
     check_env_example_declares_every_reference()
     check_compose_renders()

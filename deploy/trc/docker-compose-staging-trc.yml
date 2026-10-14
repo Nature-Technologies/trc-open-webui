@@ -121,6 +121,20 @@ services:
       # and data:/blob: images still render, so a static artifact still looks
       # right. Script-driven embeds stop working; TRC uses none.
       IFRAME_CSP: "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'"
+      # The new-chat starter prompts (spec section 12.2), replacing upstream's
+      # generic six. A JSON list of {"title": [line 1, line 2], "content": prompt};
+      # choosing one sends its content at once. Invalid JSON or an empty list
+      # silently brings the generic six back, so validate_compose.py parses it.
+      # Never put a client, person or company name here.
+      DEFAULT_PROMPT_SUGGESTIONS: >-
+        [
+        {"title": ["Top 5 clients", "by AUM"], "content": "Who are our top 5 clients by AUM?"},
+        {"title": ["Who haven't we spoken to", "in the last 90 days?"], "content": "Which clients haven't we been in contact with in the last 90 days?"},
+        {"title": ["Our strongest", "client relationships"], "content": "Which of our client relationships are strongest right now?"},
+        {"title": ["Prep me for a meeting", "with a client"], "content": "Prep me for a meeting with a client. Ask me which client first."},
+        {"title": ["Open deals", "and where they stand"], "content": "What open deals do we have, and where does each one stand?"},
+        {"title": ["Notes from", "the last two weeks"], "content": "Summarise the notes our team wrote in the last two weeks."}
+        ]
       WEBUI_AUTH: "true"
       # API keys (sk-...). Enable them so an admin can mint the key trc-backend's
       # integrations authenticate with (OPENWEBUI_ADMIN_KEY): the retention
