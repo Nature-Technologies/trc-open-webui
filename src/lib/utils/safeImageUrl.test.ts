@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('$lib/constants', () => ({ WEBUI_BASE_URL: 'https://app.example' }));
 
-import { messageImageSrc, safeImageUrl } from './safeImageUrl';
+import { messageImageSrc, messageLinkHref, safeImageUrl } from './safeImageUrl';
 
 const PLACEHOLDER = 'https://app.example/favicon.png';
 
@@ -74,5 +74,44 @@ describe('messageImageSrc', () => {
 	it('trusts nothing but relative URLs when it knows no origin', () => {
 		expect(messageImageSrc('/a.png', [])).toBe('/a.png');
 		expect(messageImageSrc('https://app.example/a.png', [])).toBeNull();
+	});
+});
+
+describe('messageLinkHref', () => {
+	const origins = ['https://app.example'];
+
+	it.each([
+		'/c/abc',
+		'files/f1',
+		'#top',
+		'?q=1',
+		'https://app.example/c/abc',
+		'HTTPS://APP.EXAMPLE/c/abc'
+	])('keeps %s', (url) => {
+		expect(messageLinkHref(url, origins)).toBe(url);
+	});
+
+	it.each([
+		'https://attacker.invalid/p',
+		'http:attacker.invalid',
+		'https:attacker.invalid',
+		'//attacker.invalid/p',
+		'/\\attacker.invalid/p',
+		'\\\\attacker.invalid/p',
+		'https://app.example@attacker.invalid/p',
+		'https://app.example.attacker.invalid/p',
+		'ht\ttp://attacker.invalid',
+		' javascript:alert(1)',
+		'JaVaScRiPt:alert(1)',
+		'data:text/html,hi',
+		'vbscript:x',
+		'file:///etc/hostname',
+		'mailto:a@attacker.invalid',
+		'blob:https://app.example/0a1b2c',
+		'',
+		null,
+		undefined
+	])('refuses %j', (url) => {
+		expect(messageLinkHref(url as never, origins)).toBeNull();
 	});
 });
