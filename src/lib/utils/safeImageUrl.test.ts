@@ -26,6 +26,11 @@ describe('safeImageUrl', () => {
 		expect(safeImageUrl(url)).toBe(url);
 	});
 
+	it('replaces a data: URL that is not an image, in any case', () => {
+		expect(safeImageUrl('data:text/html;base64,PHNjcmlwdD4=')).toBe(PLACEHOLDER);
+		expect(safeImageUrl('DATA:TEXT/HTML,hi')).toBe(PLACEHOLDER);
+	});
+
 	it.each(['DATA:IMAGE/PNG;base64,iVBORw0KGgo=', 'BLOB:https://app.example/0a1b2c'])(
 		'keeps the odd-case scheme %s, as messageImageSrc lets it through',
 		(url) => {

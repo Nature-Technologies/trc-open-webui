@@ -68,6 +68,9 @@ const card = (o: Record<string, unknown> = {}) =>
 	});
 
 describe('parseTrcDocCard', () => {
+	it('strips bidi and invisible controls from the title', () => {
+		expect(parseTrcDocCard(card({ title: 'TRC ‮list‬​' }))?.title).toBe('TRC list');
+	});
 	it('accepts a valid list card', () => {
 		expect(parseTrcDocCard(card())?.rows).toBe(8631);
 	});

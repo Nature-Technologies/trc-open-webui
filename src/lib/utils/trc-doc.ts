@@ -6,6 +6,7 @@
  * owns the chat; RAGnarok repeats its own checks. Everything here is pure.
  */
 import { WEBUI_BASE_URL } from '$lib/constants';
+import { stripSpoofingFormat } from './trc-followups';
 
 export type TrcDocKind = 'list' | 'report';
 export type TrcDocFormat = 'csv' | 'md' | 'pdf';
@@ -48,7 +49,10 @@ export const parseTrcDocCard = (text: string): TrcDocCardData | null => {
 		v: 1,
 		kind,
 		id: o.id,
-		title: typeof o.title === 'string' && o.title.trim() ? o.title.trim().slice(0, 120) : null,
+		title:
+			typeof o.title === 'string' && stripSpoofingFormat(o.title).trim()
+				? stripSpoofingFormat(o.title).trim().slice(0, 120)
+				: null,
 		rows: intOrNull(o.rows),
 		pages: intOrNull(o.pages),
 		formats: [...new Set(o.formats as TrcDocFormat[])],

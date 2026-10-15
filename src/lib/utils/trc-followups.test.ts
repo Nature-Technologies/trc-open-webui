@@ -207,3 +207,70 @@ describe('the tag-on-its-own-line variant a model sometimes writes', () => {
 		expect(isTrcFollowUpsToken(token as never)).toBe(false);
 	});
 });
+
+// C3 symmetry with the backend outlet (trc-backend filter.py): chips come only from forms the
+// outlet itself cuts and re-emits. Other fences are still hidden, never turned into chips.
+describe('chips only from forms the backend outlet vets', () => {
+	it.each([
+		['a tilde fence', '~~~\ntrc:followups\n["A"]\n~~~'],
+		['a four-backtick fence', '````\ntrc:followups\n["A"]\n````'],
+		['an upper-case tag line', '```\nTRC:FOLLOWUPS\n["A"]\n```'],
+		['an upper-case tagged fence', '```TRC:Followups\n["A"]\n```'],
+		['a tagged fence with extra info', '```trc:followups extra\n["A"]\n```']
+	])('hides %s but shows no chip from it', (_, block) => {
+		const [token] = marked.lexer(block);
+		expect(isTrcFollowUpsToken(token as never)).toBe(true);
+		expect(extractTrcFollowUps('Answer.\n\n' + block)).toEqual([]);
+	});
+
+	it('ignores an unvetted later block and keeps the vetted one', () => {
+		const vetted = '```trc:followups\n["Vetted"]\n```';
+		const rogue = '~~~\ntrc:followups\n["Rogue"]\n~~~';
+		expect(extractTrcFollowUps(`${vetted}\n\n${rogue}`)).toEqual(['Vetted']);
+	});
+
+	it('still reads the tag-on-its-own-line form with spaces around the tag line', () => {
+		expect(extractTrcFollowUps('```  \n  trc:followups  \n["A"]\n```')).toEqual(['A']);
+	});
+});
+
+describe('cleanTrcFollowUp uses the outlet origin rule', () => {
+	it.each([
+		'see http:evil.example',
+		'go //evil.example/x',
+		'go \\\\evil.example',
+		'open /\\evil.example',
+		'javascript:alert(1)',
+		'data:text/html,hi',
+		'FILE:secret',
+		'![x](y)',
+		'[click](https://a)',
+		'use `code`',
+		'see [[list:abc]]',
+		'ftp:host',
+		'ws:host'
+	])('drops %s', (item) => {
+		expect(cleanTrcFollowUp(item)).toBeNull();
+	});
+
+	it.each([
+		'Show the data: top 5 clients',
+		'Compare 2024 and 2025',
+		'AUM / revenue split',
+		'Why http: matters',
+		'Summary: top clients'
+	])('keeps %s', (item) => {
+		expect(cleanTrcFollowUp(item)).toBe(item);
+	});
+});
+
+describe('cleanTrcFollowUp strips the rarer invisible controls', () => {
+	it.each([
+		['an Arabic letter mark', '؜'],
+		['a deprecated format mark', '⁪'],
+		['a Mongolian vowel separator', '᠎'],
+		['a tag character', '\u{E0041}']
+	])('removes %s', (_, ch) => {
+		expect(cleanTrcFollowUp(`Top${ch} 5`)).toBe('Top 5');
+	});
+});
