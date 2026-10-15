@@ -1956,8 +1956,27 @@ export const initMermaid = async () => {
 	mermaid.initialize({
 		startOnLoad: false, // Should be false when using render API
 		theme: document.documentElement.classList.contains('dark') ? 'dark' : 'default',
-		securityLevel: 'loose',
-		htmlLabels: false
+		// 'strict' (Mermaid's own default): HTML in labels is encoded and click callbacks
+		// are off. Chat diagrams are model output over restored client data, so 'loose' let
+		// a prompt-injected document turn one into a script or a link (spec §12.3).
+		securityLevel: 'strict',
+		htmlLabels: false,
+		// Keys a %%{init}%% directive inside a diagram may not set. Mermaid's own list (the
+		// first six) is kept; themeCSS and the font keys are added because a url() in them
+		// survives its sanitizer and the <style> it lands in survives ours, so a
+		// prompt-injected diagram could otherwise make the browser fetch a remote URL.
+		secure: [
+			'secure',
+			'securityLevel',
+			'startOnLoad',
+			'maxTextSize',
+			'suppressErrorRendering',
+			'maxEdges',
+			'themeCSS',
+			'fontFamily',
+			'altFontFamily',
+			'themeVariables'
+		]
 	});
 	return mermaid;
 };
@@ -1972,8 +1991,17 @@ const cleanupMermaidTempElements = (id: string) => {
 	document.getElementById(`i${id}`)?.remove();
 };
 
-// Mermaid runs with securityLevel:'loose', which emits unsanitized SVG (raw javascript: hrefs,
-// HTML labels); strip active content before it reaches any innerHTML/{@html} sink.
+// Mermaid runs at securityLevel 'strict' (initMermaid), which encodes HTML in labels and
+// turns click callbacks off, but still emits <a xlink:href="https://…"> for `click X href`
+// and <image xlink:href> for icons. Mermaid SVG is rendered into the page, so every href is
+// dropped here whatever its value: a diagram carries no link and no image href.
+// DOMPurify's FORBID_ATTR always wins over ADD_ATTR. This is not a claim that nothing remote
+// can load: <style> is allowed above, and what keeps a remote url() out of it is initMermaid's
+// `secure` list, which stops an init directive setting themeCSS or the font keys. Nor does
+// this run before the render: mermaid.render() puts the diagram in temporary live elements
+// first, so an image shape (`@{shape: image, img: "https://…"}`) may start its fetch before
+// this sanitizer sees the string. Stopping that is the site CSP's img-src ('self' data: blob:),
+// not this code.
 export const sanitizeSvg = (svg: string): string =>
 	DOMPurify.sanitize(svg, {
 		USE_PROFILES: { svg: true, svgFilters: true },
@@ -1992,8 +2020,6 @@ export const sanitizeSvg = (svg: string): string =>
 			'refX',
 			'refY',
 			'orient',
-			'href',
-			'xlink:href',
 			'dominant-baseline',
 			'text-anchor',
 			'clipPathUnits',
@@ -2007,6 +2033,7 @@ export const sanitizeSvg = (svg: string): string =>
 			'aria-hidden',
 			'tabindex'
 		],
+		FORBID_ATTR: ['href', 'xlink:href'],
 		SANITIZE_DOM: true
 	});
 

@@ -7,7 +7,13 @@
 	// bytes are fetched and rendered here, and only the download links point at it.
 	import { onDestroy, onMount, tick } from 'svelte';
 	import { showControls, showTrcDoc, trcDoc } from '$lib/stores';
-	import { expiryLabel, parseCsv, trcDocUrl, type TrcDocFormat } from '$lib/utils/trc-doc';
+	import {
+		expiryLabel,
+		parseCsv,
+		trcDocKey,
+		trcDocUrl,
+		type TrcDocFormat
+	} from '$lib/utils/trc-doc';
 
 	import Markdown from '$lib/components/chat/Messages/Markdown.svelte';
 	import PDFViewer from '$lib/components/common/PDFViewer.svelte';
@@ -43,8 +49,9 @@
 	$: doc = $trcDoc;
 	$: formats = doc ? doc.formats : [];
 
-	const docKey = (d: typeof doc) => (d ? `${d.chatId}/${d.kind}/${d.id}` : '');
-	$: if (docKey(doc) !== key) reset();
+	// The key includes the expiry: a regenerated document keeps its id but gets a fresh
+	// `expires_at`, and an already-open panel must reload it rather than keep the old copy.
+	$: if (trcDocKey(doc) !== key) reset();
 
 	const defaultTab = (d: NonNullable<typeof doc>): TrcDocFormat => {
 		const preferred: TrcDocFormat = d.kind === 'list' ? 'csv' : 'md';
@@ -94,7 +101,7 @@
 		controller?.abort();
 		cache = new Map();
 		meta = null;
-		key = docKey(doc);
+		key = trcDocKey(doc);
 		controller = doc ? new AbortController() : null;
 		if (!doc) return;
 		active = defaultTab(doc);

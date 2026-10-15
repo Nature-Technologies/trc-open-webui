@@ -15,75 +15,11 @@
 </script>
 
 {#if token.type === 'html'}
-	{#if html && html.includes('<video')}
-		{@const video = html.match(/<video[^>]*>([\s\S]*?)<\/video>/)}
-		{@const videoSrc = video && video[1]}
-		{#if videoSrc}
-			<!-- svelte-ignore a11y-media-has-caption -->
-			<video
-				class="w-full my-2"
-				src={videoSrc.replaceAll('&amp;', '&')}
-				title="Video player"
-				frameborder="0"
-				referrerpolicy="strict-origin-when-cross-origin"
-				controls
-				allowfullscreen
-			></video>
-		{:else}
-			{token.text}
-		{/if}
-	{:else if html && html.includes('<audio')}
-		{@const audio = html.match(/<audio[^>]*>([\s\S]*?)<\/audio>/)}
-		{@const audioSrc = audio && audio[1]}
-		{#if audioSrc}
-			<!-- svelte-ignore a11y-media-has-caption -->
-			<audio
-				class="w-full my-2"
-				src={audioSrc.replaceAll('&amp;', '&')}
-				title="Audio player"
-				controls
-			></audio>
-		{:else}
-			{token.text}
-		{/if}
-	{:else if token.text && token.text.match(/<iframe\s+[^>]*src="https:\/\/www\.youtube\.com\/embed\/([a-zA-Z0-9_-]{11})(?:\?[^"]*)?"[^>]*><\/iframe>/)}
-		{@const match = token.text.match(
-			/<iframe\s+[^>]*src="https:\/\/www\.youtube\.com\/embed\/([a-zA-Z0-9_-]{11})(?:\?[^"]*)?"[^>]*><\/iframe>/
-		)}
-		{@const ytId = match && match[1]}
-		{#if ytId}
-			<iframe
-				class="w-full aspect-video my-2"
-				src={`https://www.youtube.com/embed/${ytId}`}
-				title="YouTube video player"
-				frameborder="0"
-				allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-				referrerpolicy="strict-origin-when-cross-origin"
-				allowfullscreen
-			>
-			</iframe>
-		{/if}
-	{:else if token.text && token.text.includes('<iframe')}
-		{@const match = token.text.match(/<iframe\s+[^>]*src="([^"]+)"[^>]*><\/iframe>/)}
-		{@const iframeSrc = match && match[1]}
-		{#if iframeSrc}
-			<iframe
-				class="w-full my-2"
-				src={iframeSrc}
-				title="Embedded content"
-				frameborder="0"
-				sandbox
-				on:load={(e) => {
-					try {
-						e.currentTarget.style.height =
-							e.currentTarget.contentWindow.document.body.scrollHeight + 20 + 'px';
-					} catch {}
-				}}
-			></iframe>
-		{:else}
-			{token.text}
-		{/if}
-	{:else if token.text && token.text.includes('<status')}
+	{#if html && /<\/?video/i.test(html)}
+		<!-- TRC: a message cannot make the browser load media or frames. A <video>, <audio> or
+		     <iframe> in message content renders nothing (and not its own markup as text either);
+		     the backend's own <file type="html"> and <status> tags are handled below. -->
+	{:else if html && /<\/?audio/i.test(html)}{:else if token.text && /<\/?iframe/i.test(token.text)}{:else if token.text && token.text.includes('<status')}
 		{@const match = token.text.match(/<status title="([^"]+)" done="(true|false)" ?\/?>/)}
 		{@const statusTitle = match && match[1]}
 		{@const statusDone = match && match[2] === 'true'}

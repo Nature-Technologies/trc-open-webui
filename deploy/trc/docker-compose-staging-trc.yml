@@ -94,6 +94,73 @@ services:
       ENABLE_SEARCH_QUERY_GENERATION: "false"
       ENABLE_RETRIEVAL_QUERY_GENERATION: "false"
       ENABLE_IMAGE_PROMPT_GENERATION: "false"
+      # Staging hardening (answer-first spec section 12.3, 2026-10-14). Each switch
+      # below is ON by default upstream, and each is a way for restored, unmasked
+      # client data to leave the trust boundary or to reach the model without
+      # passing the redaction filter. With ENABLE_PERSISTENT_CONFIG "False" this
+      # file is their only source; validate_compose.py pins every one.
+      #
+      # "Share to Community": one click posts a whole client chat to openwebui.com.
+      ENABLE_COMMUNITY_SHARING: "false"
+      # Memories and notes are put in front of the model as plain text that the
+      # redaction filter never sees, so it never masks them.
+      ENABLE_MEMORIES: "false"
+      # ENABLE_MEMORIES alone does not stop memories reaching the model: the
+      # system-context injection has its own switch (and a per-browser flag that
+      # defaults on), and the memory tools are gated by a permission.
+      ENABLE_MEMORY_SYSTEM_CONTEXT: "false"
+      USER_PERMISSIONS_FEATURES_MEMORIES: "false"
+      ENABLE_NOTES: "false"
+      # A user-written system prompt (chat controls, settings, a folder's prompt) is
+      # plain text the filter never masks. This permission hides those fields for
+      # non-admin users; it is not enforced server-side and admins always see them.
+      USER_PERMISSIONS_CHAT_SYSTEM_PROMPT: "false"
+      # The code interpreter and a code block's Run button execute model-written
+      # code in the browser (Pyodide, with network access) beside restored data.
+      # Unrelated to Hermes's own execute_code tool, which runs server-side.
+      ENABLE_CODE_INTERPRETER: "false"
+      ENABLE_CODE_EXECUTION: "false"
+      # The arena registers its own model, which the TRC filter may not cover.
+      ENABLE_EVALUATION_ARENA_MODELS: "false"
+      # A CSP <meta> Open WebUI injects into every srcdoc iframe it builds: HTML
+      # artifacts, embeds, HTML file and citation previews. HTML artifacts cannot
+      # be turned off by env (`detectArtifacts` is a per-user browser setting that
+      # defaults to on), so this CSP is what limits them. It blocks script, fetch,
+      # external image, font, media and stylesheet loads, nested frames, form posts
+      # and a <base> rewrite; inline styles and data:/blob: images still render, so
+      # a static artifact still looks right. Script-driven embeds stop working; TRC
+      # uses none. A CSP cannot block a navigation (a meta refresh, a link click),
+      # so the fork's artifact iframe also drops allow-scripts from its sandbox
+      # (Artifacts.svelte): the browser then refuses a meta-refresh redirect.
+      IFRAME_CSP: "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'"
+      # The site-wide Content-Security-Policy header. A URL in a model answer is a
+      # request the browser makes on its own, to a host the model chose; this blocks
+      # every third-party load (image, media, frame, font, stylesheet, script, fetch,
+      # XHR, WebSocket, beacon) from anywhere in the app, and the srcdoc iframes
+      # (artifacts, previews) inherit it on top of IFRAME_CSP. 'self', data: and blob:
+      # are the only sources. Measured against the built app in a real browser:
+      # 'unsafe-inline' scripts are SvelteKit's inline bootstrap, and 'unsafe-eval' is
+      # vega's expression compiler (vega-lite charts need it). connect-src lists data:
+      # and blob: because the chat input fetch()es the data: URL of every attached,
+      # pasted or dropped image to upload it (neither scheme leaves the browser). The
+      # Google Fonts stylesheet in app.html is blocked, so the UI falls back to system
+      # fonts.
+      # frame-ancestors is left unset on purpose. validate_compose.py pins this value.
+      CONTENT_SECURITY_POLICY: "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' data: blob:; frame-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
+      # The new-chat starter prompts (spec section 12.2), replacing upstream's
+      # generic six. A JSON list of {"title": [line 1, line 2], "content": prompt};
+      # choosing one sends its content at once. Invalid JSON or an empty list
+      # silently brings the generic six back, so validate_compose.py parses it.
+      # Never put a client, person or company name here.
+      DEFAULT_PROMPT_SUGGESTIONS: >-
+        [
+        {"title": ["Top 5 clients", "by AUM"], "content": "Who are our top 5 clients by AUM?"},
+        {"title": ["Who haven't we spoken to", "in the last 90 days?"], "content": "Which clients haven't we been in contact with in the last 90 days?"},
+        {"title": ["Our strongest", "client relationships"], "content": "Which of our client relationships are strongest right now?"},
+        {"title": ["Prep me for a meeting", "with a client"], "content": "Prep me for a meeting with a client. Ask me which client first."},
+        {"title": ["Open deals", "and where they stand"], "content": "What open deals do we have, and where does each one stand?"},
+        {"title": ["Notes from", "the last two weeks"], "content": "Summarise the notes our team wrote in the last two weeks."}
+        ]
       WEBUI_AUTH: "true"
       # API keys (sk-...). Enable them so an admin can mint the key trc-backend's
       # integrations authenticate with (OPENWEBUI_ADMIN_KEY): the retention

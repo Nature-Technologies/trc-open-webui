@@ -13,6 +13,7 @@
 	import { copyToClipboard, unescapeHtml } from '$lib/utils';
 
 	import Image from '$lib/components/common/Image.svelte';
+	import { messageImageSrc, messageLinkHref } from '$lib/utils/safeImageUrl';
 	import KatexRenderer from './KatexRenderer.svelte';
 	import Source from './Source.svelte';
 	import HtmlToken from './HTMLToken.svelte';
@@ -82,7 +83,15 @@
 		<HtmlToken {id} {token} {onSourceClick} />
 	{:else if token.type === 'link'}
 		{@const noteId = getNoteIdFromHref(token.href)}
-		{#if /^\s*⬇/.test(token.text ?? '')}
+		{#if !messageLinkHref(token.href)}
+			<!-- TRC: a link to anywhere but this app is a click-only leak channel (the model picks the
+			     URL), so it shows as its text. Covers inline, reference and auto links alike. -->
+			{#if token.tokens}
+				<svelte:self id={`${id}-a`} tokens={token.tokens} {onSourceClick} {done} />
+			{:else}
+				{token.text}
+			{/if}
+		{:else if /^\s*⬇/.test(token.text ?? '')}
 			<!-- TRC report download: the backend emits `[⬇ Download PDF](url)`; render it
 			     as a proper button (falls back to a plain link on any un-updated client). -->
 			<TrcDownloadButton href={token.href} label={token.text} />
@@ -108,7 +117,15 @@
 			>
 		{/if}
 	{:else if token.type === 'image'}
-		<Image src={token.href} alt={token.text} allowExternal={true} />
+		{@const imageSrc = messageImageSrc(token.href)}
+		{#if imageSrc}
+			<Image src={imageSrc} alt={token.text} allowExternal={true} />
+		{:else}
+			<!-- TRC: an image URL in a message is a request the browser makes by itself, to a host
+			     the model chose. Only this app's own, data: and blob: images load; the rest is
+			     shown as its alt text. -->
+			<span>{token.text || 'image'}</span>
+		{/if}
 	{:else if token.type === 'strong'}
 		<strong><svelte:self id={`${id}-strong`} tokens={token.tokens} {onSourceClick} /></strong>
 	{:else if token.type === 'em'}

@@ -17,6 +17,7 @@ Run: python deploy/trc/validate_compose.py
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import subprocess
 import sys
@@ -43,6 +44,70 @@ EXPECTED_SERVICE_NETWORKS = {'open-webui': {'poc-net', 'trc-shared'}}
 # container name over poc-net.
 EXPECTED_HERMES_BASE_URL = 'http://hermes-agent:8642/v1'
 
+# Staging hardening (answer-first spec section 12.3). Every one of these is ON by default
+# upstream, and each is a way for restored, unmasked client data to leave the trust
+# boundary or to reach the model without passing the redaction filter. With
+# ENABLE_PERSISTENT_CONFIG "False" the compose env is the only source, so a deleted line
+# silently turns the feature back on; the value is the reason, quoted in the failure.
+EXPECTED_DISABLED_FEATURES = {
+    'ENABLE_COMMUNITY_SHARING': 'one click posts a whole client chat to openwebui.com',
+    'ENABLE_MEMORIES': 'memories reach the model as plain text the filter never masks',
+    'ENABLE_MEMORY_SYSTEM_CONTEXT': (
+        "this, not ENABLE_MEMORIES, gates putting a user's memories into the model's system context, "
+        'as plain text the filter never masks'
+    ),
+    'USER_PERMISSIONS_FEATURES_MEMORIES': (
+        'this permission, not ENABLE_MEMORIES, gates the memory tools that read and write memories '
+        'the filter never masks'
+    ),
+    'USER_PERMISSIONS_CHAT_SYSTEM_PROMPT': (
+        'a user-written system prompt (chat controls, settings, folder prompts) reaches the model '
+        'as plain text the filter never masks; the permission hides those fields for non-admins'
+    ),
+    'ENABLE_NOTES': 'notes reach the model as plain text the filter never masks',
+    'ENABLE_CODE_INTERPRETER': 'the interpreter runs model-written code in the browser beside restored data',
+    'ENABLE_CODE_EXECUTION': "a code block's Run button executes model-written code in the browser",
+    'ENABLE_EVALUATION_ARENA_MODELS': 'the arena registers a model the TRC filter may not be attached to',
+}
+# Injected as a <meta> CSP into every srcdoc iframe (HTML artifacts, embeds, file and
+# citation previews). HTML artifacts cannot be disabled by env, so this CSP is what limits
+# them: no script, no fetch/XHR, no external image, font, media or stylesheet, no nested
+# frame, no form post, no <base>; inline styles and data:/blob: media only. A CSP cannot
+# stop a navigation (a meta refresh, a link click), so the fork also drops allow-scripts
+# from the artifact iframe's sandbox (Artifacts.svelte); this check cannot see that.
+EXPECTED_IFRAME_CSP = (
+    "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; "
+    "font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'"
+)
+# The site-wide Content-Security-Policy header (backend/open_webui/utils/security_headers.py
+# reads CONTENT_SECURITY_POLICY). Every client answer passes through the browser, and a
+# model-written URL is a request the browser makes on its own, carrying whatever the model
+# put in it to a host the model chose. This policy blocks every load from a third party:
+# images, media, frames, fonts, stylesheets, scripts and fetch/XHR/WebSocket/beacon, with
+# 'self' (plus data:/blob:) as the only source. It also reaches the srcdoc iframes (artifacts,
+# previews), which inherit it on top of their own IFRAME_CSP. Measured in a real browser
+# against the built app: 'unsafe-inline' for scripts is SvelteKit's inline bootstrap in
+# index.html, and 'unsafe-eval' is vega's expression compiler (a vega-lite chart fails to
+# render without it). connect-src also lists data: and blob:, which never leave the browser:
+# the chat input turns every attached, pasted or dropped image into a data: URL and then
+# fetch()es it to get a Blob to upload, and the image preview's download/copy fetch() a
+# data:/blob: src, so with 'self' alone image attachments silently never upload. Not set on
+# purpose: frame-ancestors (who may embed the app is a deployment decision). A CSP cannot
+# block a navigation, so links stay as they are.
+EXPECTED_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+    "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; "
+    "font-src 'self' data:; connect-src 'self' data: blob:; frame-src 'self' blob:; worker-src 'self' blob:; "
+    "object-src 'none'; base-uri 'self'; form-action 'self'"
+)
+
+# The new-chat starter prompts (spec section 12.2). Open WebUI falls back to its generic
+# six ("Tell me a fun fact about the Roman Empire") when the JSON is invalid or the list
+# is empty, and only logs it, so the shape is asserted here.
+PROMPT_SUGGESTIONS_MIN = 4
+PROMPT_SUGGESTIONS_MAX = 8
+PROMPT_SUGGESTION_MAX_CHARS = 200
+
 # The TRC build files. `deploy/trc/Dockerfile` is a COPY of the repository-root
 # Dockerfile plus the TRC deltas, kept out of the root so that a fork sync from
 # open-webui/open-webui never conflicts there. That trade is only safe because
@@ -61,7 +126,7 @@ EXPECTED_BUILD_DOCKERFILE = 'deploy/trc/Dockerfile'
 # To re-pin after an upstream change, re-apply the TRC deltas to
 # deploy/trc/Dockerfile and then:
 #   python -c "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('Dockerfile').read_bytes().replace(b'\r\n',b'\n')).hexdigest())"
-EXPECTED_UPSTREAM_DOCKERFILE_SHA256 = '242789dfbc58d41a3528b9490e93a6b73955cadb097475c6549faf243d89d167'
+EXPECTED_UPSTREAM_DOCKERFILE_SHA256 = '0f38d4424b75b057295eccf48ba3ef1e3edf1f662e646d1bed32c54840cc35c8'
 
 failures: list[str] = []
 
@@ -140,6 +205,82 @@ def check_env_example_declares_every_reference() -> None:
         'them -- a plain ${VAR} omission would otherwise default to a blank '
         'string with only a warning from `docker compose config`',
     )
+
+
+def csp_sources(policy: object, directive: str) -> list[str] | None:
+    """The source list of one directive in a CSP string, or None when it is not there."""
+    for part in str(policy or '').split(';'):
+        tokens = part.split()
+        if tokens and tokens[0].lower() == directive:
+            return tokens[1:]
+    return None
+
+
+def check_hardening_env(env: dict) -> None:
+    """Assert the staging hardening switches (spec section 12.3) are set and off."""
+    for key, why in EXPECTED_DISABLED_FEATURES.items():
+        value = env.get(key)
+        check(
+            str(value).strip().lower() == 'false',
+            f'{key} must be "false" -- {why}. Got {value!r}; with ENABLE_PERSISTENT_CONFIG '
+            '"False" a missing line restores the upstream default, which is on',
+        )
+    check(
+        env.get('IFRAME_CSP') == EXPECTED_IFRAME_CSP,
+        f'IFRAME_CSP must be {EXPECTED_IFRAME_CSP!r} -- HTML artifacts auto-open and '
+        'cannot be disabled by env, so this CSP is what blocks their scripts, fetches '
+        'and external subresources. It cannot block a navigation; the artifact '
+        f'iframe sandbox omits allow-scripts for that. Got {env.get("IFRAME_CSP")!r}',
+    )
+    check(
+        env.get('CONTENT_SECURITY_POLICY') == EXPECTED_CONTENT_SECURITY_POLICY,
+        f'CONTENT_SECURITY_POLICY must be {EXPECTED_CONTENT_SECURITY_POLICY!r} -- it is the one '
+        'layer that stops the browser fetching a model-chosen third-party URL (image, media, '
+        'frame, font, stylesheet, script, fetch, WebSocket) from anywhere in the app, and the '
+        f'srcdoc iframes inherit it. Got {env.get("CONTENT_SECURITY_POLICY")!r}',
+    )
+    # connect-src needs data: and blob: (the chat input fetch()es the data: URL of every
+    # attached image to upload it, and the image preview fetch()es its src) and must name no
+    # host: 'self', data: and blob: never leave the browser, anything else is a third party.
+    connect = csp_sources(env.get('CONTENT_SECURITY_POLICY'), 'connect-src')
+    check(
+        connect is not None and {'data:', 'blob:'} <= set(connect) and set(connect) <= {"'self'", 'data:', 'blob:'},
+        "CONTENT_SECURITY_POLICY's connect-src must be 'self' plus data: and blob: and nothing else -- "
+        'without data:/blob: every image attached, pasted or dropped into the chat silently fails to '
+        'upload (the input fetch()es its data: URL), and any other source lets the browser reach '
+        f'a third party. Got {connect!r}',
+    )
+
+
+def check_prompt_suggestions(env: dict) -> None:
+    """Assert DEFAULT_PROMPT_SUGGESTIONS parses into the shape config.py expects.
+
+    `[{"title": [line_1, line_2], "content": prompt}, ...]`. Anything else silently
+    restores upstream's generic suggestions on the new-chat screen.
+    """
+    raw = env.get('DEFAULT_PROMPT_SUGGESTIONS')
+    try:
+        items = json.loads(raw) if isinstance(raw, str) else None
+    except ValueError:
+        items = None
+    check(
+        isinstance(items, list) and PROMPT_SUGGESTIONS_MIN <= len(items) <= PROMPT_SUGGESTIONS_MAX,
+        f'DEFAULT_PROMPT_SUGGESTIONS must be a JSON list of {PROMPT_SUGGESTIONS_MIN}-'
+        f'{PROMPT_SUGGESTIONS_MAX} suggestions -- invalid JSON or an empty list brings '
+        "back upstream's generic prompts with only a log line",
+    )
+    for i, item in enumerate(items if isinstance(items, list) else []):
+        title = item.get('title') if isinstance(item, dict) else None
+        content = item.get('content') if isinstance(item, dict) else None
+        check(
+            isinstance(title, list) and len(title) == 2 and all(isinstance(t, str) and t.strip() for t in title),
+            f'DEFAULT_PROMPT_SUGGESTIONS[{i}].title must be two non-empty strings, got {title!r}',
+        )
+        check(
+            isinstance(content, str) and bool(content.strip()) and len(content) <= PROMPT_SUGGESTION_MAX_CHARS,
+            f'DEFAULT_PROMPT_SUGGESTIONS[{i}].content must be a non-empty string of at most '
+            f'{PROMPT_SUGGESTION_MAX_CHARS} characters, got {content!r}',
+        )
 
 
 def check_compose_renders() -> None:
@@ -832,7 +973,9 @@ def check_deploy_workflow() -> None:
     # Named steps of this flow. Asserted by name because each carries a property
     # nothing else does, so a rename that quietly drops one would otherwise
     # leave the whole file passing.
-    for step_name in ('Verify host preconditions', 'Deploy', 'Smoke test'):
+    # 'Smoke test' was removed from the deploy deliberately (cb3adc3e7, #3); the
+    # Deploy step's own compose up/wait is the health gate now.
+    for step_name in ('Verify host preconditions', 'Deploy'):
         check(
             _step_by_name(doc, step_name) is not None,
             f'no step named {step_name!r} -- expected one of the steps of the build-on-the-deploy-host flow',
@@ -1158,6 +1301,8 @@ def main() -> int:
         'OPENAI_API_BASE_URL/OPENAI_API_KEY and chat stays broken after a '
         'recreate',
     )
+    check_hardening_env(env)
+    check_prompt_suggestions(env)
 
     check_env_example_declares_every_reference()
     check_compose_renders()

@@ -14,12 +14,11 @@
 		artifactContents
 	} from '$lib/stores';
 	import { copyToClipboard, createMessagesList } from '$lib/utils';
-	import { injectCsp } from '$lib/utils/csp';
+	import { FALLBACK_IFRAME_CSP, injectCsp, svgArtifactDocument } from '$lib/utils/csp';
 
 	import XMark from '../icons/XMark.svelte';
 	import ArrowsPointingOut from '../icons/ArrowsPointingOut.svelte';
 	import Tooltip from '../common/Tooltip.svelte';
-	import SvgPanZoom from '../common/SVGPanZoom.svelte';
 	import ArrowLeft from '../icons/ArrowLeft.svelte';
 	import Download from '../icons/Download.svelte';
 
@@ -243,15 +242,18 @@
 				{#if contents.length > 0}
 					<div class="max-w-full w-full h-full">
 						{#if contents[selectedContentIdx].type === 'iframe'}
+							<!-- TRC: no allow-scripts. A model-written HTML block auto-opens here, and the CSP
+							     meta cannot stop a navigation: without allow-scripts the browser refuses a
+							     <meta http-equiv="refresh"> redirect to an attacker URL (and every script). -->
 							<iframe
 								bind:this={iframeElement}
 								title="Content"
 								srcdoc={injectCsp(
 									contents[selectedContentIdx].content,
-									$config?.ui?.iframe_csp ?? ''
+									$config?.ui?.iframe_csp || FALLBACK_IFRAME_CSP
 								)}
 								class="w-full border-0 h-full rounded-none"
-								sandbox="allow-scripts allow-downloads{($settings?.iframeSandboxAllowForms ?? false)
+								sandbox="allow-downloads{($settings?.iframeSandboxAllowForms ?? false)
 									? ' allow-forms'
 									: ''}{($settings?.iframeSandboxAllowSameOrigin ?? false)
 									? ' allow-same-origin'
@@ -259,10 +261,18 @@
 								on:load={iframeLoadHandler}
 							></iframe>
 						{:else if contents[selectedContentIdx].type === 'svg'}
-							<SvgPanZoom
-								className=" w-full h-full max-h-full overflow-hidden"
-								svg={contents[selectedContentIdx].content}
-							/>
+							<!-- TRC: an SVG artifact is model-written markup. Injected into the page it would load
+							     its <image href> and style url() outside every CSP, so it is framed instead: behind
+							     the CSP meta and with an empty (everything denied) sandbox. -->
+							<iframe
+								title="Content"
+								srcdoc={svgArtifactDocument(
+									contents[selectedContentIdx].content,
+									$config?.ui?.iframe_csp ?? ''
+								)}
+								class="w-full border-0 h-full rounded-none"
+								sandbox=""
+							></iframe>
 						{/if}
 					</div>
 				{:else}

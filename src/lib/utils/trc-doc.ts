@@ -6,6 +6,7 @@
  * owns the chat; RAGnarok repeats its own checks. Everything here is pure.
  */
 import { WEBUI_BASE_URL } from '$lib/constants';
+import { stripSpoofingFormat } from './trc-followups';
 
 export type TrcDocKind = 'list' | 'report';
 export type TrcDocFormat = 'csv' | 'md' | 'pdf';
@@ -48,7 +49,10 @@ export const parseTrcDocCard = (text: string): TrcDocCardData | null => {
 		v: 1,
 		kind,
 		id: o.id,
-		title: typeof o.title === 'string' && o.title.trim() ? o.title.trim().slice(0, 120) : null,
+		title:
+			typeof o.title === 'string' && stripSpoofingFormat(o.title).trim()
+				? stripSpoofingFormat(o.title).trim().slice(0, 120)
+				: null,
 		rows: intOrNull(o.rows),
 		pages: intOrNull(o.pages),
 		formats: [...new Set(o.formats as TrcDocFormat[])],
@@ -112,6 +116,24 @@ export const trcDocUrl = (
 	if (download) q.set('download', 'true');
 	return `${WEBUI_BASE_URL}/api/v1/trc/docs/${doc.kind}/${encodeURIComponent(doc.id)}?${q.toString()}`;
 };
+
+/** The fork route that rebuilds an expired document in place (contract C4). */
+export const trcDocRegenerateUrl = (
+	doc: Pick<TrcDocCardData, 'kind' | 'id'>,
+	chatId: string
+): string => {
+	const q = new URLSearchParams({ chat_id: chatId });
+	return `${WEBUI_BASE_URL}/api/v1/trc/docs/${doc.kind}/${encodeURIComponent(doc.id)}/regenerate?${q.toString()}`;
+};
+
+/**
+ * The viewer panel's identity for an open document. It includes the expiry: Regenerate
+ * keeps the id and changes only `expires_at`, and a panel already showing that document
+ * must reload rather than keep serving the expired copy.
+ */
+export const trcDocKey = (
+	doc: (Pick<TrcDocCardData, 'kind' | 'id' | 'expires_at'> & { chatId: string }) | null
+): string => (doc ? `${doc.chatId}/${doc.kind}/${doc.id}/${doc.expires_at ?? ''}` : '');
 
 const FORMULA_GUARDED = /^'[=+\-@]/;
 

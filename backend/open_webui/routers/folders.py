@@ -15,6 +15,7 @@ from open_webui.internal.db import get_async_session
 from open_webui.models.chat_messages import ChatMessages
 from open_webui.models.config import Config
 from open_webui.models.chats import Chats
+from open_webui.models.feedbacks import Feedbacks
 from open_webui.models.folders import (
     FolderForm,
     FolderModel,
@@ -738,6 +739,13 @@ async def delete_folder_by_id(
                     detail=ERROR_MESSAGES.DEFAULT('Error deleting folder'),
                 )
             finally:
+                # Whatever happened above -- success, an error, a cancelled request -- purge the
+                # feedback snapshots of every chat already deleted: a snapshot is a full, unmasked
+                # copy of the chat it rates, and an exception after the chats are gone would
+                # otherwise skip the purge and strand it. Local and never-raising. It opens its
+                # own session (no `db`): after a failed statement the request session may not be
+                # usable. Idempotent, so it is harmless if this loop ever really iterates.
+                await Feedbacks.purge_feedbacks_by_chat_ids(deleted_chat_ids)
                 # Get all subfolders
                 subfolders = await Folders.get_folders_by_parent_id_and_user_id(folder.id, folder_owner_id, db=db)
                 folders.extend(subfolders)
@@ -751,6 +759,8 @@ async def delete_folder_by_id(
     # Last, and under a single overall budget rather than a per-call one:
     # every chat and folder row is already committed and every grant already
     # revoked, so a slow, unreachable or cancelled RAGnarok can now only cost
-    # this request time it has bounded -- it can no longer skip anything.
+    # this request time it has bounded -- it can no longer skip anything. (The feedback
+    # purge for these chats already ran in the loop's `finally`, ahead of this remote call
+    # and whether or not the loop succeeded.)
     await notify_chats_deleted(folder_owner_id, deleted_chat_ids)
     return True

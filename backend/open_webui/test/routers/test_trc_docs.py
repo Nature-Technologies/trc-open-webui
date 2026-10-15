@@ -4,6 +4,7 @@ The route function is invoked directly as a plain coroutine, with the chat looku
 RAGnarok session patched, so no live app, DB, or network is needed.
 """
 
+import json
 import logging
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
@@ -238,3 +239,204 @@ class TestLogHygiene:
         assert KEY not in text
         assert 'Jane Invented' not in text
         assert 'jane@example.invalid' not in text
+
+
+# ---------------------------------------------------------------------------------------
+# POST /api/v1/trc/docs/{kind}/{doc_id}/regenerate (contract C4)
+# ---------------------------------------------------------------------------------------
+
+OK_BODY = {
+    'status': 'ok',
+    'kind': 'list',
+    'id': LIST_ID,
+    'expires_at': '2026-10-14T12:15:00+00:00',
+    'rebuilt': 'current_data',
+}
+
+
+def _json(data, status=200, **kw):
+    return FakeResponse(status=status, body=json.dumps(data).encode('utf-8'), content_type='application/json', **kw)
+
+
+async def _regen(session, kind='list', doc_id=LIST_ID, **overrides):
+    p1, p2, p3, p4 = _patches(session, **overrides)
+    with p1, p2, p3, p4:
+        return await trc_docs.regenerate_trc_doc(kind=kind, doc_id=doc_id, chat_id='c1', user=USER)
+
+
+def _body(resp):
+    return json.loads(resp.body)
+
+
+class TestRegenerateForwarding:
+    @pytest.mark.asyncio
+    async def test_posts_identity_from_the_session_with_the_service_key(self):
+        session = FakeSession(_json(OK_BODY))
+        await _regen(session)
+
+        assert len(session.calls) == 1
+        url, kwargs = session.calls[0]
+        assert url == f'http://ragnarok.internal:8000/api/docs/list/{LIST_ID}/regenerate'
+        assert kwargs['headers'] == {'Authorization': f'Bearer {KEY}'}
+        assert kwargs['json'] == {'session_id': 'u1:c1', 'user_id': 'u1'}
+
+    @pytest.mark.asyncio
+    async def test_200_passes_the_contract_body_through(self):
+        resp = await _regen(FakeSession(_json(OK_BODY)))
+        assert resp.status_code == 200
+        assert _body(resp) == OK_BODY
+        assert resp.headers['cache-control'] == 'no-store'
+
+    @pytest.mark.asyncio
+    async def test_200_keeps_only_contract_keys(self):
+        noisy = {**OK_BODY, 'title': 'Synthetic Holdings Ltd', 'object_key': 'reports/abc.pdf'}
+        resp = await _regen(FakeSession(_json(noisy)))
+        assert _body(resp) == OK_BODY
+
+    @pytest.mark.asyncio
+    async def test_202_pending_for_a_report(self):
+        resp = await _regen(
+            FakeSession(_json({'status': 'pending', 'kind': 'report', 'id': REPORT_ID}, status=202)),
+            kind='report',
+            doc_id=REPORT_ID,
+        )
+        assert resp.status_code == 202
+        assert _body(resp) == {'status': 'pending', 'kind': 'report', 'id': REPORT_ID}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('reason', ['no_recipe', 'mapping_gone', 'render_failed'])
+    async def test_409_cannot_rebuild_passes_through(self, reason):
+        body = {'detail': {'status': 'cannot_rebuild', 'reason': reason}}
+        resp = await _regen(FakeSession(_json(body, status=409)))
+        assert resp.status_code == 409
+        assert _body(resp) == body
+
+
+class TestRegenerateRefusals:
+    @pytest.mark.asyncio
+    async def test_chat_not_owned_is_404_without_any_post(self):
+        session = FakeSession(_json(OK_BODY))
+        with pytest.raises(HTTPException) as exc:
+            await _regen(session, chat=None)
+        assert exc.value.status_code == 404
+        assert session.calls == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        'kind,doc_id',
+        [('list', REPORT_ID), ('report', LIST_ID), ('list', '../etc/passwd'), ('report', REPORT_ID + '\n')],
+    )
+    async def test_wrong_shape_id_is_404_without_any_post(self, kind, doc_id):
+        session = FakeSession(_json(OK_BODY))
+        with pytest.raises(HTTPException) as exc:
+            await _regen(session, kind=kind, doc_id=doc_id)
+        assert exc.value.status_code == 404
+        assert session.calls == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('overrides', [{'base': ''}, {'key': ''}, {'base': None}])
+    async def test_unconfigured_is_503(self, overrides):
+        session = FakeSession(_json(OK_BODY))
+        with pytest.raises(HTTPException) as exc:
+            await _regen(session, **overrides)
+        assert exc.value.status_code == 503
+        assert session.calls == []
+
+
+class TestRegenerateBackendAnswers:
+    @pytest.mark.asyncio
+    async def test_backend_404_is_404(self):
+        """Unknown id, another user's document or another chat's: one answer for all."""
+        with pytest.raises(HTTPException) as exc:
+            await _regen(FakeSession(_json({'detail': 'document not found'}, status=404)))
+        assert exc.value.status_code == 404
+        assert exc.value.detail == 'Document not found'
+
+    @pytest.mark.asyncio
+    async def test_backend_429_is_429(self):
+        with pytest.raises(HTTPException) as exc:
+            await _regen(FakeSession(_json({'detail': 'rate limited'}, status=429)))
+        assert exc.value.status_code == 429
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        'status,data',
+        [
+            (500, {'detail': 'Internal Server Error'}),
+            (401, {'detail': 'bad credential'}),
+            (200, {'status': 'ok'}),
+            (200, {**OK_BODY, 'rebuilt': 'something_else'}),
+            (202, {'status': 'ok'}),
+            (409, {'detail': {'status': 'cannot_rebuild', 'reason': 'brand_new_reason'}}),
+            (409, {'detail': 'conflict'}),
+            (200, ['not', 'an', 'object']),
+        ],
+    )
+    async def test_anything_off_contract_is_503_never_500(self, status, data):
+        with pytest.raises(HTTPException) as exc:
+            await _regen(FakeSession(_json(data, status=status)))
+        assert exc.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_non_json_body_is_503(self):
+        resp = FakeResponse(status=200, body=b'<html>oops</html>', content_type='text/html')
+        with pytest.raises(HTTPException) as exc:
+            await _regen(FakeSession(resp))
+        assert exc.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_oversize_body_is_503(self):
+        big = _json(OK_BODY, content_length=trc_docs._REGENERATE_MAX_BYTES + 1)
+        with pytest.raises(HTTPException) as exc:
+            await _regen(FakeSession(big))
+        assert exc.value.status_code == 503
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('error', [aiohttp.ClientError('boom'), TimeoutError()])
+    async def test_transport_errors_are_503(self, error):
+        with pytest.raises(HTTPException) as exc:
+            await _regen(FakeSession(error=error))
+        assert exc.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_logs_never_contain_the_key(self, caplog):
+        caplog.set_level(logging.DEBUG)
+        await _regen(FakeSession(_json(OK_BODY)))
+        with pytest.raises(HTTPException):
+            await _regen(FakeSession(error=aiohttp.ClientError(f'bad http://u:{KEY}@h/')))
+        assert 'trc_docs: regenerate' in caplog.text
+        assert KEY not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_deeply_nested_body_is_503_not_a_crash(self):
+        """json.loads raises RecursionError (not ValueError) on a deeply nested document, and
+        60k brackets fit under the size cap. The card must still get its 503, never a 500."""
+        resp = FakeResponse(status=200, body=b'[' * 60000, content_type='application/json')
+        with pytest.raises(HTTPException) as exc:
+            await _regen(FakeSession(resp))
+        assert exc.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_the_log_line_names_the_document(self, caplog):
+        caplog.set_level(logging.INFO)
+        await _regen(FakeSession(_json(OK_BODY)))
+        line = next(r.getMessage() for r in caplog.records if 'trc_docs: regenerate' in r.getMessage())
+        assert f'doc={LIST_ID}' in line
+        assert 'user=u1' in line and 'chat=c1' in line
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        'session',
+        [
+            FakeSession(_json({'detail': 'Internal Server Error'}, status=500)),
+            FakeSession(error=aiohttp.ClientError('boom')),
+        ],
+        ids=['off-contract answer', 'transport error'],
+    )
+    async def test_the_503_warning_names_the_document(self, session, caplog):
+        caplog.set_level(logging.WARNING)
+        with pytest.raises(HTTPException) as exc:
+            await _regen(session)
+        assert exc.value.status_code == 503
+        line = next(r.getMessage() for r in caplog.records if 'trc_docs: regenerate' in r.getMessage())
+        assert f'doc={LIST_ID}' in line
