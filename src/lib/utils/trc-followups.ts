@@ -16,10 +16,20 @@ const UNRESOLVED = '[unavailable]';
 
 type CodeLike = { type?: string; lang?: string; raw?: string; text?: string };
 
+const firstLine = (text: string): string => text.split('\n', 1)[0].trim().toLowerCase();
+
+/**
+ * A model sometimes puts the tag on its own line inside an untagged fence:
+ * "```\ntrc:followups\n[...]\n```". Treated as the same block.
+ */
+const isTagLineVariant = (token: CodeLike): boolean =>
+	!(token.lang ?? '').trim() && firstLine(token.text ?? '') === TRC_FOLLOWUPS_LANG;
+
 /** Whether a marked token is a trc:followups fence in ANY form — hidden, never rendered. */
 export const isTrcFollowUpsToken = (token: CodeLike | null | undefined): boolean =>
 	token?.type === 'code' &&
-	(token.lang ?? '').trim().split(/\s+/)[0].toLowerCase() === TRC_FOLLOWUPS_LANG;
+	((token.lang ?? '').trim().split(/\s+/)[0].toLowerCase() === TRC_FOLLOWUPS_LANG ||
+		isTagLineVariant(token));
 
 /** The outlet's exact form: "```trc:followups\n" + body + "\n```" (one trailing newline ok). */
 const isExactFence = (raw: string, text: string): boolean =>
@@ -42,10 +52,14 @@ export const extractTrcFollowUps = (content: string): string[] => {
 	for (const token of marked.lexer(content)) {
 		if (isTrcFollowUpsToken(token as CodeLike)) last = token as CodeLike;
 	}
-	if (!last || !isExactFence(last.raw ?? '', last.text ?? '')) return [];
+	if (!last) return [];
+	let body: string;
+	if (isExactFence(last.raw ?? '', last.text ?? '')) body = last.text ?? '';
+	else if (isTagLineVariant(last)) body = (last.text ?? '').split('\n').slice(1).join('\n');
+	else return [];
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(last.text ?? '');
+		parsed = JSON.parse(body);
 	} catch {
 		return [];
 	}

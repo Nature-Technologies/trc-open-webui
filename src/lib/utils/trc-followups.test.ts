@@ -174,3 +174,28 @@ describe('trcFollowUpsFromParts', () => {
 		expect(trcFollowUpsFromParts('plain', 'also plain')).toEqual([]);
 	});
 });
+
+describe('the tag-on-its-own-line variant a model sometimes writes', () => {
+	const variant = (body: string) => '```\ntrc:followups\n' + body + '\n```';
+
+	it('is hidden like any trc:followups fence', () => {
+		const [token] = marked.lexer(variant('["A"]'));
+		expect(isTrcFollowUpsToken(token as never)).toBe(true);
+	});
+
+	it('is parsed into follow-ups', () => {
+		expect(
+			extractTrcFollowUps('Answer.\n\n' + variant('["Same list by AUM", "Notes on the top two"]'))
+		).toEqual(['Same list by AUM', 'Notes on the top two']);
+	});
+
+	it('still drops unsafe items and invalid JSON', () => {
+		expect(extractTrcFollowUps(variant('["see https://x.example", "Fine"]'))).toEqual(['Fine']);
+		expect(extractTrcFollowUps(variant('not json'))).toEqual([]);
+	});
+
+	it('leaves an ordinary untagged code block alone', () => {
+		const [token] = marked.lexer('```\nprint(1)\n```');
+		expect(isTrcFollowUpsToken(token as never)).toBe(false);
+	});
+});
