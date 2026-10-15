@@ -36,8 +36,7 @@ export function safeImageUrl(url: string, allowExternal = false): string {
 		isUnderBaseUrl(url) ||
 		url.startsWith('https://www.gravatar.com/avatar/') ||
 		(allowExternal && /^https?:\/\//i.test(url)) ||
-		url.startsWith('data:') ||
-		url.startsWith('blob:') ||
+		/^(data|blob):/i.test(url) ||
 		isSameOriginPath(url)
 	) {
 		return url;

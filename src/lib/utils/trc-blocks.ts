@@ -11,7 +11,12 @@ type CodeLike = { type?: string; lang?: string; raw?: string };
 const isTrcDocToken = (token: CodeLike): boolean =>
 	token.type === 'code' && (token.lang ?? '').trim().split(/\s+/)[0].toLowerCase() === 'trc-doc';
 
-/** `text` without its TRC machine blocks; the very same string when it has none. */
+/**
+ * `text` without its TRC machine blocks; the very same string when it has none.
+ * Top-level blocks only: a fence nested in a blockquote or list item is hidden when rendered
+ * but stays in the copied text (its raw cannot be cut out of the parent without rewriting
+ * the quote/list markers). The outlet only ever writes the fences at top level.
+ */
 export const stripTrcMachineBlocks = (text: string): string => {
 	if (!text || !/trc[:-]/i.test(text)) return text;
 

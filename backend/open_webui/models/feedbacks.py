@@ -570,6 +570,8 @@ class FeedbackTable:
                     deleted += result.rowcount or 0
                 await db.commit()
         except Exception as e:
+            # Greppable on purpose: the purge cannot roll back the committed chat delete, so
+            # this line is the only trace of snapshots left behind (see docstring).
             log.error(f'Feedback purge failed for {len(ids)} chat(s): {type(e).__name__}')
             return 0
         return deleted
@@ -578,7 +580,11 @@ class FeedbackTable:
         """Delete every feedback row ``user_id`` wrote; return how many.
 
         For the paths that remove ALL of a user's chats (delete-all-my-chats, user
-        delete): every rating they gave carries a snapshot of one of those chats. Same
+        delete). Deliberately broader than "ratings of the deleted chats": a rating row
+        holds an unmasked copy of the chat it rates, and that chat may be someone else's
+        (a reader can rate a shared chat), so any such copy dies with its author rather
+        than outliving them. The cost is that the author's ratings of other people's
+        still-live chats go too. Same
         never-raises contract as ``purge_feedbacks_by_chat_ids``; unlike the upstream
         ``delete_feedbacks_by_user_id`` above, which the evaluations route relies on to
         raise.

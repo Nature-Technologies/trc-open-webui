@@ -14,7 +14,7 @@
 		artifactContents
 	} from '$lib/stores';
 	import { copyToClipboard, createMessagesList } from '$lib/utils';
-	import { injectCsp, svgArtifactDocument } from '$lib/utils/csp';
+	import { FALLBACK_IFRAME_CSP, injectCsp, svgArtifactDocument } from '$lib/utils/csp';
 
 	import XMark from '../icons/XMark.svelte';
 	import ArrowsPointingOut from '../icons/ArrowsPointingOut.svelte';
@@ -250,7 +250,7 @@
 								title="Content"
 								srcdoc={injectCsp(
 									contents[selectedContentIdx].content,
-									$config?.ui?.iframe_csp ?? ''
+									$config?.ui?.iframe_csp || FALLBACK_IFRAME_CSP
 								)}
 								class="w-full border-0 h-full rounded-none"
 								sandbox="allow-downloads{($settings?.iframeSandboxAllowForms ?? false)

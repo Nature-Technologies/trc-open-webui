@@ -73,7 +73,11 @@ export const isRegenBusy = (s: RegenState): boolean =>
 export const regenStatus = (s: RegenState, expired: boolean): string | null =>
 	s.phase === 'rebuilt' && expired ? null : s.message;
 
-/** Fresh copies made in this page, by document id, so a re-mounted card stays fresh. */
+/**
+ * Fresh copies made in this page, by document id, so a re-mounted card stays fresh. Never
+ * evicted on purpose: it lives for one page session, holds one short entry per document
+ * rebuilt by hand, and a reload empties it.
+ */
 export const rebuiltTrcDocs = new Map<string, string>();
 
 const obj = (v: unknown): Record<string, unknown> | null =>

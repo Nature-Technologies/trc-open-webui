@@ -25,6 +25,13 @@ describe('safeImageUrl', () => {
 	])('keeps %s', (url) => {
 		expect(safeImageUrl(url)).toBe(url);
 	});
+
+	it.each(['DATA:IMAGE/PNG;base64,iVBORw0KGgo=', 'BLOB:https://app.example/0a1b2c'])(
+		'keeps the odd-case scheme %s, as messageImageSrc lets it through',
+		(url) => {
+			expect(safeImageUrl(url)).toBe(url);
+		}
+	);
 });
 
 describe('messageImageSrc', () => {

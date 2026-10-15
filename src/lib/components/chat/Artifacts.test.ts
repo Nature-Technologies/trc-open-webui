@@ -80,6 +80,16 @@ describe('Artifacts iframe sandbox', () => {
 			`<meta http-equiv="Content-Security-Policy" content="${CSP}"><p>Synthetic artifact</p>`
 		);
 	});
+
+	it('falls back to a strict CSP when the deployment configures none', () => {
+		config.set({ ui: {} } as any);
+		const { attrs } = artifactIframe();
+		const doc = attrs.srcdoc as string;
+		const policy = doc.match(/Content-Security-Policy" content="([^"]*)"/)?.[1] ?? '';
+		expect(policy).toContain("default-src 'none'");
+		expect(policy).toContain('img-src data: blob:');
+		expect(doc.indexOf('Content-Security-Policy')).toBeLessThan(doc.indexOf('<p>'));
+	});
 });
 
 // An ```svg block is model-written markup too, and used to be injected into the page itself

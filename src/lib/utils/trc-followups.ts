@@ -36,10 +36,20 @@ const isExactFence = (raw: string, text: string): boolean =>
 	(raw.endsWith('\n') ? raw.slice(0, -1) : raw) ===
 	'```' + TRC_FOLLOWUPS_LANG + '\n' + text + '\n```';
 
+/**
+ * Invisible format characters that can reorder or hide what a chip says: bidi marks and
+ * overrides/isolates, zero-width space, word joiner and invisible operators, soft hyphen,
+ * BOM. Zero-width joiner/non-joiner stay: emoji sequences and some scripts need them.
+ */
+const SPOOFING_FORMAT = /[­​‎‏‪-‮⁠-⁤⁦-⁩﻿]/g;
+
 /** One item as plain, single-line text, or null when it must be dropped. */
 export const cleanTrcFollowUp = (item: unknown): string | null => {
 	if (typeof item !== 'string') return null;
-	const text = item.replace(/[\s\p{Cc}]+/gu, ' ').trim();
+	const text = item
+		.replace(SPOOFING_FORMAT, '')
+		.replace(/[\s\p{Cc}]+/gu, ' ')
+		.trim();
 	if (!text || [...text].length > MAX_TRC_FOLLOWUP_CHARS) return null;
 	if (UNSAFE.test(text) || text.includes(UNRESOLVED)) return null;
 	return text;

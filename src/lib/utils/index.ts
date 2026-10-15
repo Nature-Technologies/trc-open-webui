@@ -1997,7 +1997,11 @@ const cleanupMermaidTempElements = (id: string) => {
 // dropped here whatever its value: a diagram carries no link and no image href.
 // DOMPurify's FORBID_ATTR always wins over ADD_ATTR. This is not a claim that nothing remote
 // can load: <style> is allowed above, and what keeps a remote url() out of it is initMermaid's
-// `secure` list, which stops an init directive setting themeCSS or the font keys.
+// `secure` list, which stops an init directive setting themeCSS or the font keys. Nor does
+// this run before the render: mermaid.render() puts the diagram in temporary live elements
+// first, so an image shape (`@{shape: image, img: "https://…"}`) may start its fetch before
+// this sanitizer sees the string. Stopping that is the site CSP's img-src ('self' data: blob:),
+// not this code.
 export const sanitizeSvg = (svg: string): string =>
 	DOMPurify.sanitize(svg, {
 		USE_PROFILES: { svg: true, svgFilters: true },

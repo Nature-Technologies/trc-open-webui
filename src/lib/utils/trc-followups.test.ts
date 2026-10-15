@@ -155,6 +155,14 @@ describe('cleanTrcFollowUp', () => {
 	it('trims and keeps plain text', () => {
 		expect(cleanTrcFollowUp('  Top 5 clients by AUM  ')).toBe('Top 5 clients by AUM');
 	});
+	it('removes bidi overrides and invisible format marks that could spoof the chip', () => {
+		expect(cleanTrcFollowUp('Show ‮qes‬ clients⁦')).toBe('Show qes clients');
+		expect(cleanTrcFollowUp('Top​ 5﻿ clients')).toBe('Top 5 clients');
+	});
+	it('keeps a zero-width joiner inside an emoji sequence', () => {
+		const family = '\u{1F468}‍\u{1F469}‍\u{1F467}';
+		expect(cleanTrcFollowUp(`Plan for ${family}`)).toBe(`Plan for ${family}`);
+	});
 	it('rejects what is not a string', () => {
 		expect(cleanTrcFollowUp(7)).toBeNull();
 		expect(cleanTrcFollowUp(undefined)).toBeNull();
